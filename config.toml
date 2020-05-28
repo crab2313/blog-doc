@@ -1,0 +1,30 @@
+title = "crab2313's blog"
+
+# The URL the site will be built for
+base_url = "https://crab2313.github.io"
+
+# Whether to automatically compile all Sass files in the sass directory
+compile_sass = true
+
+# Whether to do syntax highlighting
+# Theme can be customised by setting the `highlight_theme` variable to a theme supported by Zola
+highlight_code = true
+
+# Whether to build a search index to be used later on by a JavaScript library
+build_search_index = false
+
+theme = "even"
+taxonomies = [
+    # You can enable/disable feeds
+    {name = "tags", feed = true},
+]
+
+[extra]
+# This is the default menu
+even_menu = [
+    {url = "$BASE_URL", name = "Home"},
+    {url = "$BASE_URL/tags", name = "Tags"},
+    {url = "https://github.com/crab2313", name = "Github"},
+]
+
+even_title = "crab2313's blog"
