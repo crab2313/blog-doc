@@ -3,7 +3,7 @@ title = "Floyd循环检测算法"
 date = 2016-04-25
 
 [taxonomies]
-tags = ["kernel", "pci"]
+tags = ["algorithm"]
 
 +++
 
