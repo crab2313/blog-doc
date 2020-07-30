@@ -4,7 +4,7 @@ date = 2020-07-25
 draft = true
 
 [taxonomies]
-tags = ["kernel", "riscv"]
+tags = ["kernel", "risc-v"]
 
 +++
 
