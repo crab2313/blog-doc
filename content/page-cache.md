@@ -59,38 +59,6 @@ struct address_space {
 } __attribute__((aligned(sizeof(long)))) __randomize_layout;
 ```
 
-
-
-
-
-## page cache limit补丁
-
-本小节分析腾讯内核tlinux的page cache limit补丁，并将其移植到4.19内核上。改补丁进行的操作还是比较简单的，即向用户态提供接口并直接控制限制page cache的大小。补丁主要原理为向内核page cache的insert路径加入钩子函数，检测page cache当前的大小是否超标，如果超标则进行reclaim操作。
-
-### 功能入口
-
-```diff
-+/*
-+ * Like add_to_page_cache_locked, but used to add newly allocated pages:
-+ * the page is new, so we can just run __set_page_locked() against it.
-+ */
-+int add_to_page_cache(struct page *page,
-+               struct address_space *mapping, pgoff_t offset, gfp_t gfp_mask)
-+{
-+       int error;
-+
-+       if (unlikely(vm_pagecache_limit_pages) && pagecache_over_limit() > 0)
-+               shrink_page_cache(gfp_mask, page);
-+
-+       __SetPageLocked(page);
-+       error = add_to_page_cache_locked(page, mapping, offset, gfp_mask);
-+       if (unlikely(error))
-+               __ClearPageLocked(page);
-+       return error;
-+}
-+EXPORT_SYMBOL(add_to_page_cache);
-```
-
 ## Sync系统调用
 
 通过分析`sync`和`syncfs`系统调用，深入理解linux内核的page cache和swap实现。事实上这个系统调用可以拆分称好几个部分，我们先来分析第一个部分，即flusher内核线程。
@@ -246,6 +214,77 @@ static void wb_wakeup(struct bdi_writeback *wb)
 ### __writeback_inodes_sb
 
 该函数实现更加简单，即对于每一个`b_io`上的inode，首先通过`inode->i_sb`获取其所属的superblock，然后尝试获取该superblock的锁，最后调用`writeback_sb_inodes`函数回写该superblock上的所有inode。在获取锁失败的情况下，将该inode放入`b_dirty`队列。
+
+
+
+## Page Cache Limit补丁
+
+本小节分析腾讯内核tlinux的page cache limit补丁，并将其移植到4.19内核上。改补丁进行的操作还是比较简单的，即向用户态提供接口并直接控制限制page cache的大小。补丁主要原理为向内核page cache的insert路径加入钩子函数，检测page cache当前的大小是否超标，如果超标则进行reclaim操作。
+
+### 功能入口
+
+补丁功能入口有四处：
+
+* add_to_page_cache，该函数为将特定page加入到一个page cache时调用的函数
+* add_to_page_cache_lru，同上，但是会将page放入LRU
+* balance_pgdat，为kswapd的内核线程函数，负责平衡特定NUMA节点内存的水位
+* shmem_unuse
+
+补丁实现一个名为`shrink_page_cache`的函数，并在上面提到的三个函数中加入hook，一旦检测到page cache limit功能启用且当前page cache的大小超过了阈值，则会调用`shrink_page_cache`进行page reclaim操作。
+
+```c
+	if (unlikely(vm_pagecache_limit_pages) && pagecache_over_limit() > 0)
+		shrink_page_cache(gfp_mask, page);
+```
+
+### page cache大小计算
+
+补丁中通过实现的`pagecache_over_limit`函数计算page cache的大小。计算公式原理如下：
+
+```
+min((sizeof(全局active_list) + sizeof(全局inactive_list)) * 94%, sizeof(全局file_pages) - sizeof(全局file_mapped))
+```
+
+本质上就是计算系统中所有的非映射的file类型page，然后计算系统全局inactive和active list中非mapped的page（取乐个经验数值6%），取其中小的一方。计算方法主观性太强，不够客观。
+
+### shrink_zone_per_memcg
+
+函数实现很简单，就是遍历`sc->target_mem_cgroup`下的所有的`Memory CGroup`，得到对应的lruvec，然后在其由参数传入的page list上调用`shrink_list`函数，尝试进行`page reclaim`。如果已经释放足够多的page，则退出。
+
+### shrink_all_zones
+
+这里有个很明显的bug，就是在for_each_node循环里调用了多次finish_wait。这个操作在大部分情况下并不会造成严重后果，但是工作逻辑肯定就不对了。为了这个函数的实现，zone中加了一个锁，该函数会遍历所有的zone，然后尝试持有这个锁，如果没有持有任何一个锁，就会调用schedule让出CPU，进入`pagecache_reclaim_wq`进行等待。对于每一个获取到锁的node，进行如下操作：
+
+* pass = 0时放弃对active list进行shrink操作
+* pass >= 3 或者 通过优先级计算出的单次扫描大小大于传入参数时调用`shrink_node_per_memcg`
+
+### _shrink_page_cache
+
+如描述那样分多个pass进行释放操作。调用`shrink_all_zones`和`shrink_slabs`进行操作。实现很简单，不赘述。
+
+### 总结
+
+补丁总共看到三个，上面的文档是分析最初的那个补丁的。主要缺点如下：
+
+* 在page cache大小较大的情况下影响IO性能，因为进行IO时`add_to_page_cache`是一个调用非常频繁的函数，这使得多个CPU执行完计算后等待在`pagecache_reclaim_wq`下，无故增加开销
+* 代码质量不高，原没有到达可以upstream的质量
+* 功能与原有page reclaim实现有冲突，会加剧资源和锁的竞争
+
+很明显它们后面发现了类似的问题，后两个补丁分别加入了如下的功能：
+
+* 限制slab内page的释放操作
+* 提供选项将整个操作转换为内核线程异步进行
+
+我认为补丁可能做如下改进：
+
+* 提供编译选项使该功能可以通过内核配置开关
+* 将整个功能集成在kswapd中，即内核原有的async page reclaim代码段中，进一步提升性能，减小开销
+* 优化代码细节，原补丁部分代码在内核中有冗余实现
+
+至于补丁的实用性方面的评估：
+
+* 补丁本是作用是限制page cache的大小，但是page cache的使用可以加速IO性能，且大部分file类型的page cache可以以非常低的开销进行释放。补丁的实用性仅在小部分特殊场景下有所体现。
+* 目前能够想到的场景为大量IO写入操作，在原子上下文需要进行内存申请的情况
 
 
 
@@ -584,7 +623,64 @@ typedef struct pglist_data {
 
 ### shrink_lruvec
 
+该函数原先名称为`shrink_node_memcg`，在内核支持`Memory CGroup`之后改名，其目的是对一个lruvec进行reclaim操作。
 
+TODO
+
+### shrink_list
+
+函数本意是根据给定page list的类型调用`shrink_active_list`或者`shrink_inactive_list`。除此之外，要注意`scan_control`中提供了一个`may_deactivate`字段，其意义目前看起来就是要求不能减小某个active的page list。可以看到：
+
+```c
+	if (is_active_lru(lru)) {
+		if (sc->may_deactivate & (1 << is_file_lru(lru)))
+			shrink_active_list(nr_to_scan, lruvec, sc, lru);
+		else
+			sc->skipped_deactivate = 1;
+		return 0;
+	}
+```
+
+如果该字段生效且阻止了shrink操作，则`skipped_deactivate`会被置1。
+
+### isolate_lru_pages
+
+这个函数的注释比较详细，这里先粗略讲一下原理。内核中page reclaim是一条非常频繁的codepath，而每次操作LRU的时候都需要持有`pgdat->lru_lock`。这使得这个锁的竞争非常激烈，降低了系统的整体性能。因此，一个最常用的优化就是先持有锁，然后快速将LRU需要进行操作的一部分从LRU上移除，并放到一个本地的list中，然后释放掉锁。由于这个新的list是本地的，因此无需关心同步问题，可以放心操作。`isolate_lru_pages`即为进行这一系列操作的函数，其原型如下：
+
+```c
+static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
+		struct lruvec *lruvec, struct list_head *dst,
+		unsigned long *nr_scanned, struct scan_control *sc,
+		enum lru_list lru);
+```
+
+参数的介绍在注释中都有，不再赘述。
+
+### shrink_active_list
+
+函数开头定义了三个list：
+
+```c
+	LIST_HEAD(l_hold);	/* The pages which were snipped off */
+	LIST_HEAD(l_active);
+	LIST_HEAD(l_inactive);
+```
+
+前面提到了`isolate_lru_pages`进行的优化，事实上`l_hold`即为用于临时存放从LRU上取下的一部分page的list。
+
+```c
+	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &l_hold,
+				     &nr_scanned, sc, lru);
+```
+
+接下来，对于`l_hold`里的每一个page，都进行如下操作：
+
+1. 调用`cond_resched`函数，主动释放CPU资源，允许被抢占
+2. 将page从`l_hold`中取下
+3. 如果page被标记为`unevictable`，则调用`putback_lru_page`将其重新放回LRU中
+4. 如果page在目标`Memory CGroup`中有进程引用，且位于`VM_EXEC`属性的区域里，且当前list是`FILE`类型的话，将page放入`l_active`中
+5. 否则放入`l_inavtive`中。
+6. 最后将这几个list放回LRU中。
 
 ### shrink_node
 
