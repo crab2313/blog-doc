@@ -15,7 +15,7 @@ tags = ["gnome", "mutter", "drm"]
 * 使mutter可以利用Atomic Modesetting API，更加充分高效的利用硬件特性，消除modesetting的中间状态
 * 使KMS API的调用主体可以为独立线程，本质上是允许KMS API的异步调用，即调用时
 
-首先明确其抽象的目标，即transactional，这个词与数据库中的意义一致。即对于KMS设备进行的modesetting是原子性的，没有中间状态，要么成功要么失败。因此`MetaKms`使用`MetaKmsUpdate`抽象一个transactional modesetting进行的操作。这套抽象目前使用普通的KMS API实现，但是只要接口移植完毕，那么即可直接调用Atomic KMS实现对应的操作。因此`MetaKms`作为容器也有选择后端实现的功能，但是当前的实现都为普通KMS。
+首先明确其抽象的目标，即`transactional modesetting`，`transactional`这个词与数据库中的意义一致。即对于KMS设备进行的modesetting是原子性的，没有中间状态，要么成功要么失败，失败时不会进行任何状态更新。因此`MetaKms`使用`MetaKmsUpdate`抽象一个`transaction`。这套抽象目前使用普通的KMS API实现，但是只要接口移植完毕，那么即可直接调用Atomic KMS实现对应的操作。因此`MetaKms`作为容器也有选择后端实现的功能，但是当前的实现都为普通KMS。
 
 创建`MetaKms`对象时，需要传入一个`MetaBackend`，`meta_kms_new`函数会自行创建一个`MetaKmsImpl`对象：
 
@@ -40,10 +40,10 @@ tags = ["gnome", "mutter", "drm"]
 这个结构体是transactional KMS API设计的核心。其核心思想是：
 
 * 对显示控制器的操作（即modesetting）transaction化
-* 每个`MetaKmsUpdate`即代表一个transaction，操作时将所有操作cache到`MetaKmsUpdate`中
+* 每个`MetaKmsUpdate`即代表一个transaction，操作时将所有操作缓存到`MetaKmsUpdate`中
 * 只有commit操作时，原先cache的操作才会真正应用到显示控制器中
 
-因此，`MetaKms`会保存一个当前的`MetaKmsUpdate`，所有需要进行的KMS操作都需要cache到其中，然后在合适的时机进行commit。
+因此，`MetaKms`会保存一个当前的`MetaKmsUpdate`，所有需要进行的KMS操作都需要缓存到其中，然后在合适的时机进行commit。
 
 ```c
 struct _MetaKmsUpdate
@@ -135,7 +135,7 @@ typedef struct _MetaKmsImplDevicePrivate
                                   impl_device);
 ```
 
-本质上是在GMainContext中注册了一个`GSource`，以DRM的文件描述符的可写状态为事件源，以传入的`kms_event_dispatch_in_impl`函数作为`dispatch`回调函数。
+本质上是在GMainContext中注册了一个`GSource`，以DRM的文件描述符的可读状态为事件源，以传入的`kms_event_dispatch_in_impl`函数作为`dispatch`回调函数。
 
 ```c
 static gpointer
