@@ -48,14 +48,22 @@ tags = ["gnome", "mutter", "drm"]
 ```c
 struct _MetaKmsUpdate
 {
+  MetaKmsDevice *device;
+
   gboolean is_sealed;
+  uint64_t sequence_number;
 
   MetaPowerSave power_save;
   GList *mode_sets;
   GList *plane_assignments;
-  GList *page_flips;
-  GList *connector_properties;
+  GList *connector_updates;
   GList *crtc_gammas;
+
+  MetaKmsCustomPageFlipFunc custom_page_flip_func;
+  gpointer custom_page_flip_user_data;
+
+  GList *page_flip_listeners;
+  GList *result_listeners;
 };
 ```
 
@@ -193,6 +201,20 @@ typedef struct _MetaKmsPageFlip
 
 注意`drmModePageFlip`函数在一个VBlank期间只能调用一次，在已经调用过一次的情况下再继续调用的话会返回`-EBUSY`。可以看到`process_page_flip`函数在该情况下实现了一个缓存机制，将返回`-EBUSY`的调用重新调度到下一次VBlank。这里只需要看到它是将多余的PageFlip计算出一个时间间隔，并缓存到了一张表内，其余细节在分析frame调度时再分析。
 
+## MetaKmsImplDeviceAtomic
+
+半年之后jonas终于把`Atomic Modesetting`的支持做完了，不过熟悉GNOME的人都应该懂这个特性起码review半年以上，也就是mutter 40都不一定可以合入。前面提到`Atomic Modesetting`的支持就差最后一个`Buffer`，以前我对于DRM的理解没有那么深刻，结果误解了这个`Buffer`的含义。这个`Buffer`实质上是指`Buffer`更新，即设置CRTC的scanout。因此，需要定义一个`PlaneAssignment`用于抽象这个操作。
+
+`Atomic Modesetting`的实质是使用`Atomic API`替换掉原有的legacy接口，需要重新实现一个`MetaKmsImplDevice`，也就是`MetaKmsImplDeviceAtomic`。该函数的核心操作就是`process_update`，在进行这个操作时，首先自己是否已经初始化，如果没有初始化，则进行以下操作：
+
+* MetaKmsDevice里管理的所有connector的`CRTC_ID`属性设置为0
+* MetaKmsDevice里管理的所有plane的`CRTC_ID`与`FB_ID`设置为0
+
+随后则进行update操作，如下：
+
+* 依次处理`MetaKmsUpdate`中保存的信息，本质上就是更改对应Object里的属性
+* 然后commit
+
 ## MetaKmsDevice
 
 ~~没意思。~~
@@ -255,4 +277,3 @@ Buffer管理应该是transacational KMS最后一个还没有做的部分了。�
 * new_take。直接将一个`gbm_bo`包装成一个`MetaDrmBufferGbm`。
 
 无论使用哪个方法进行创建，都需要使用`meta_gpu_kms_add_fb`将整个buffer注册到DRM中，并得到一个`framebuffer id`并保存起来。
-
