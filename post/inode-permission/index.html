@@ -1,0 +1,111 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>inode权限检查 - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="inode_permission函数 inode_permission函数用于对inode进行权限检查，我们传给其一个mask参数，这个参数是"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/inode-permission/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="inode权限检查"><meta property="og:description" content="inode_permission函数 inode_permission函数用于对inode进行权限检查，我们传给其一个mask参数，这个参数是"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/inode-permission/"><meta property="article:section" content="post"><meta property="article:published_time" content="2018-01-07T00:00:00+00:00"><meta property="article:modified_time" content="2018-01-07T00:00:00+00:00"><meta itemprop=name content="inode权限检查"><meta itemprop=description content="inode_permission函数 inode_permission函数用于对inode进行权限检查，我们传给其一个mask参数，这个参数是"><meta itemprop=datePublished content="2018-01-07T00:00:00+00:00"><meta itemprop=dateModified content="2018-01-07T00:00:00+00:00"><meta itemprop=wordCount content="2063"><meta itemprop=keywords content="kernel,filesystem,"><meta name=twitter:card content="summary"><meta name=twitter:title content="inode权限检查"><meta name=twitter:description content="inode_permission函数 inode_permission函数用于对inode进行权限检查，我们传给其一个mask参数，这个参数是"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>inode权限检查</h1><div class=post-meta><span class=post-time>2018-01-07</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><a href=#inode_permission函数>inode_permission函数</a></li><li><a href=#__inode_permission函数>__inode_permission函数</a></li><li><a href=#generic_permission函数>generic_permission函数</a></li></ul></nav></div></div><div class=post-content><h1 id=inode_permission函数>inode_permission函数</h1><p><code>inode_permission</code>函数用于对inode进行权限检查，我们传给其一个mask参数，这个参数是一个bitmap，主要有三个标志：</p><ul><li>MAY_READ：inode是否可读</li><li>MAY_WRITE：inode是否可写</li><li>MAY_EXEC：inode是否可执行（对于文件夹来说意味着是否可以访问文件夹下的文件或文件夹）</li></ul><p>如果该函数的返回值为0，说明检查通过。<code>inode_permission</code>所做的检查主要分为两个部分：</p><ol><li>文件系统级别检查</li><li>inode级别检查</li></ol><p>文件系统级别检查主要是检查文件系统一级的权限，这里只考虑一种情况：文件系统只读，代码如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=k>if</span> <span class=p>(</span><span class=n>unlikely</span><span class=p>(</span><span class=n>mask</span> <span class=o>&amp;</span> <span class=n>MAY_WRITE</span><span class=p>))</span> <span class=p>{</span>
+                <span class=n>umode_t</span> <span class=n>mode</span> <span class=o>=</span> <span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_mode</span><span class=p>;</span>
+
+                <span class=cm>/* Nobody gets write access to a read-only fs. */</span>
+                <span class=k>if</span> <span class=p>((</span><span class=n>sb</span><span class=o>-&gt;</span><span class=n>s_flags</span> <span class=o>&amp;</span> <span class=n>MS_RDONLY</span><span class=p>)</span> <span class=o>&amp;&amp;</span>
+                    <span class=p>(</span><span class=n>S_ISREG</span><span class=p>(</span><span class=n>mode</span><span class=p>)</span> <span class=o>||</span> <span class=n>S_ISDIR</span><span class=p>(</span><span class=n>mode</span><span class=p>)</span> <span class=o>||</span> <span class=n>S_ISLNK</span><span class=p>(</span><span class=n>mode</span><span class=p>)))</span>
+                        <span class=k>return</span> <span class=o>-</span><span class=n>EROFS</span><span class=p>;</span>
+        <span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>也就是说，如果文件系统只读，并且该inode的类型是普通文件、文件夹、链接，那么这个inode是不可写的，注意这里设备文件不受影响。</p><h1 id=__inode_permission函数>__inode_permission函数</h1><p>inode级别的检查由<code>__inode_permission</code>函数进行，这个函数首先确保两个情况下inode不能写入：</p><ol><li>inode的标志inode->i_flags中存在<code>S_IMMUTABLE</code>标志</li><li>inode的<code>i_uid</code>或者<code>i_gid</code>非法，这会使得更新mtime的时候将错误的信息写回去。</li></ol><p>接下来通过三个不同的函数检查权限：</p><ol><li>do_inode_permission</li><li>devcgroup_inode_permission</li><li>security_inode_permission</li></ol><p>devcgroup_inode_permission涉及到了cgroup子系统，security_inode_permission涉及到LSM子系统，这里不多讲。来看<code>do_inode_permission</code>函数，这个函数首先检查inode->op是否有.permission函数指针，如果有，直接调用这个函数指针，如果没有则调用通用的检查函数<code>generic_permission</code>。事实上这段代码被运行的频率非常高，需要重点优化，所以使用inode->i_opflags中的一个<code>IOP_FASTPERM</code>标志表明i_op->permission是否为NULL，这个缓存使得下次操作不用再次检查。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=kr>inline</span> <span class=kt>int</span> <span class=nf>do_inode_permission</span><span class=p>(</span><span class=k>struct</span> <span class=n>inode</span> <span class=o>*</span><span class=n>inode</span><span class=p>,</span> <span class=kt>int</span> <span class=n>mask</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=k>if</span> <span class=p>(</span><span class=n>unlikely</span><span class=p>(</span><span class=o>!</span><span class=p>(</span><span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_opflags</span> <span class=o>&amp;</span> <span class=n>IOP_FASTPERM</span><span class=p>)))</span> <span class=p>{</span>
+                <span class=k>if</span> <span class=p>(</span><span class=n>likely</span><span class=p>(</span><span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_op</span><span class=o>-&gt;</span><span class=n>permission</span><span class=p>))</span>
+                        <span class=k>return</span> <span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_op</span><span class=o>-&gt;</span><span class=n>permission</span><span class=p>(</span><span class=n>inode</span><span class=p>,</span> <span class=n>mask</span><span class=p>);</span>
+
+                <span class=cm>/* This gets set once for the inode lifetime */</span>
+                <span class=n>spin_lock</span><span class=p>(</span><span class=o>&amp;</span><span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_lock</span><span class=p>);</span>
+                <span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_opflags</span> <span class=o>|=</span> <span class=n>IOP_FASTPERM</span><span class=p>;</span>
+                <span class=n>spin_unlock</span><span class=p>(</span><span class=o>&amp;</span><span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_lock</span><span class=p>);</span>
+        <span class=p>}</span>
+        <span class=k>return</span> <span class=n>generic_permission</span><span class=p>(</span><span class=n>inode</span><span class=p>,</span> <span class=n>mask</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><h1 id=generic_permission函数>generic_permission函数</h1><p>只要inode没有单独实现自己的inode->op->permission操作，那么就会使用默认<code>generic_permission</code>进行权限检查。这个函数首先调用<code>acl_permission_check</code>进行基本的权限检查，然后处理capabilities。<code>acl_permission_check</code>主要做了如下检查：</p><ol><li>如果fsuid与inode->i_uid相同，那么直接比较inode->i_mode中与user相关三位和mask是否匹配</li><li>如果fsuid与inode->i_uid不相同，并且inode所在的文件系统支持POSIX_ACL，那么检查POSIX_ACL，如果检索有结果（无论是允许还是阻止），都会直接返回该结果</li><li>如果fsuid与inode->i_uid不相同，并且POSIX_ACL没有检索结果（包括inode所在文件系统不支持POSIX ACL的情况），但是当前进程属于inode->i_gid代表的group，那么比较inode->i_mode中与group相关的三位和mask是否匹配</li><li>上述条件都不满足的情况下，比较inode->i_mode中与other相关的三位和mask是否匹配</li></ol><p>当<code>acl_permission_check</code>认定当前进程没有权限对inode进行由mask代表的操作时，<code>generic_permission</code>才会继续进行capabilities的检查。涉及到inode权限的capabilities有两个：CAP_DAC_OVERRIDE和CAP_DAC_READ_SEARCH。CAP_DAC_OVERRIDE可以让进程（几乎）无视文件设置的三组权限位，而CAP_DAC_READ_SEARCH赋予进程搜索文件夹和读取文件的权限。由于文件夹的三组权限位与普通文件表示的意义是不一样的，所以这两个capability的行为也是不同的。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=k>if</span> <span class=p>(</span><span class=n>S_ISDIR</span><span class=p>(</span><span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_mode</span><span class=p>))</span> <span class=p>{</span>
+                <span class=cm>/* DACs are overridable for directories */</span>
+                <span class=k>if</span> <span class=p>(</span><span class=n>capable_wrt_inode_uidgid</span><span class=p>(</span><span class=n>inode</span><span class=p>,</span> <span class=n>CAP_DAC_OVERRIDE</span><span class=p>))</span>
+                        <span class=k>return</span> <span class=mi>0</span><span class=p>;</span>
+                <span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=p>(</span><span class=n>mask</span> <span class=o>&amp;</span> <span class=n>MAY_WRITE</span><span class=p>))</span>
+                        <span class=k>if</span> <span class=p>(</span><span class=n>capable_wrt_inode_uidgid</span><span class=p>(</span><span class=n>inode</span><span class=p>,</span>
+                                                     <span class=n>CAP_DAC_READ_SEARCH</span><span class=p>)</span>
+<span class=p>)</span>
+                                <span class=k>return</span> <span class=mi>0</span><span class=p>;</span>
+                <span class=k>return</span> <span class=o>-</span><span class=n>EACCES</span><span class=p>;</span>
+        <span class=p>}</span>
+        <span class=cm>/*
+</span><span class=cm>         * Read/write DACs are always overridable.
+</span><span class=cm>         * Executable DACs are overridable when there is
+</span><span class=cm>         * at least one exec bit set.
+</span><span class=cm>         */</span>
+        <span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=p>(</span><span class=n>mask</span> <span class=o>&amp;</span> <span class=n>MAY_EXEC</span><span class=p>)</span> <span class=o>||</span> <span class=p>(</span><span class=n>inode</span><span class=o>-&gt;</span><span class=n>i_mode</span> <span class=o>&amp;</span> <span class=n>S_IXUGO</span><span class=p>))</span>
+                <span class=k>if</span> <span class=p>(</span><span class=n>capable_wrt_inode_uidgid</span><span class=p>(</span><span class=n>inode</span><span class=p>,</span> <span class=n>CAP_DAC_OVERRIDE</span><span class=p>))</span>
+                        <span class=k>return</span> <span class=mi>0</span><span class=p>;</span>
+
+        <span class=cm>/*
+</span><span class=cm>         * Searching includes executable on directories, else just read.
+</span><span class=cm>         */</span>
+        <span class=n>mask</span> <span class=o>&amp;=</span> <span class=n>MAY_READ</span> <span class=o>|</span> <span class=n>MAY_WRITE</span> <span class=o>|</span> <span class=n>MAY_EXEC</span><span class=p>;</span>
+        <span class=k>if</span> <span class=p>(</span><span class=n>mask</span> <span class=o>==</span> <span class=n>MAY_READ</span><span class=p>)</span>
+                <span class=k>if</span> <span class=p>(</span><span class=n>capable_wrt_inode_uidgid</span><span class=p>(</span><span class=n>inode</span><span class=p>,</span> <span class=n>CAP_DAC_READ_SEARCH</span><span class=p>))</span>
+                        <span class=k>return</span> <span class=mi>0</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>对于文件夹：</p><ul><li>CAP_DAC_OVERRIDE直接pass</li><li>CAP_DAC_READ_SEARCH允许MAY_READ和MAY_EXEC</li></ul><p>对于普通文件：</p><ul><li>CAP_DAC_OVERRIDE对待MAY_EXEC是不同的：如果mask中出现了MAY_EXEC，那么只有三组权限位中至少有一个X位被设置的时候才pass，其余情况全pass。</li><li>CAP_DAC_READ_SEARCH只允许MAY_READ</li></ul></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2018-01-07</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/kernel/>kernel</a>
+<a href=/crab2313.github.io/tags/filesystem/>filesystem</a></div><nav class=post-nav><a class=prev href=crab2313.github.io/post/usb-hub/><i class="iconfont icon-left"></i>
+<span class="prev-text nav-default">USB Hub驱动分析</span>
+<span class="prev-text nav-mobile">上一篇</span></a>
+<a class=next href=crab2313.github.io/post/eventfd/><span class="next-text nav-default">eventfd在内核中的实现</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>

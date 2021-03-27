@@ -1,0 +1,372 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>SMMU内核驱动分析 - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="IOMMU核心框架层 IOMMU核心框架是管理IOMMU设备的一个通过框架，IOMMU设备通过实现特定的回调函数并将自身注册到IOMMU核心框"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/smmu/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="SMMU内核驱动分析"><meta property="og:description" content="IOMMU核心框架层 IOMMU核心框架是管理IOMMU设备的一个通过框架，IOMMU设备通过实现特定的回调函数并将自身注册到IOMMU核心框"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/smmu/"><meta property="article:section" content="post"><meta property="article:published_time" content="2020-02-20T00:00:00+00:00"><meta property="article:modified_time" content="2020-02-20T00:00:00+00:00"><meta itemprop=name content="SMMU内核驱动分析"><meta itemprop=description content="IOMMU核心框架层 IOMMU核心框架是管理IOMMU设备的一个通过框架，IOMMU设备通过实现特定的回调函数并将自身注册到IOMMU核心框"><meta itemprop=datePublished content="2020-02-20T00:00:00+00:00"><meta itemprop=dateModified content="2020-02-20T00:00:00+00:00"><meta itemprop=wordCount content="6318"><meta itemprop=keywords content="kernel,iommu,arm,"><meta name=twitter:card content="summary"><meta name=twitter:title content="SMMU内核驱动分析"><meta name=twitter:description content="IOMMU核心框架层 IOMMU核心框架是管理IOMMU设备的一个通过框架，IOMMU设备通过实现特定的回调函数并将自身注册到IOMMU核心框"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>SMMU内核驱动分析</h1><div class=post-meta><span class=post-time>2020-02-20</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><a href=#iommu核心框架层>IOMMU核心框架层</a><ul><li><a href=#iommu_domain_alloc>iommu_domain_alloc</a></li><li><a href=#iommu_attach_device>iommu_attach_device</a></li><li><a href=#iommu_detach_device>iommu_detach_device</a></li><li><a href=#iommu_map>iommu_map</a></li><li><a href=#iommu_iova_to_phys>iommu_iova_to_phys</a></li><li><a href=#iommu-group>IOMMU Group</a><ul><li><a href=#iommu_group_add_device>iommu_group_add_device</a></li><li><a href=#iommu_group_get_for_dev>iommu_group_get_for_dev</a></li></ul></li><li><a href=#bus-integration>Bus integration</a><ul><li><a href=#iommu_fwspec>iommu_fwspec</a></li></ul></li><li><a href=#iommu-domain>IOMMU Domain</a></li></ul></li><li><a href=#smmu硬件及驱动分析>SMMU硬件及驱动分析</a><ul><li><a href=#stream-mapping管理>Stream Mapping管理</a></li><li><a href=#arm_smmu_add_device>arm_smmu_add_device</a></li><li><a href=#arm_smmu_device_group>arm_smmu_device_group</a></li><li><a href=#arm_smmu_domain_alloc>arm_smmu_domain_alloc</a></li><li><a href=#arm_smmu_attach_dev>arm_smmu_attach_dev</a></li></ul></li></ul></nav></div></div><div class=post-content><h1 id=iommu核心框架层>IOMMU核心框架层</h1><p>IOMMU核心框架是管理IOMMU设备的一个通过框架，IOMMU设备通过实现特定的回调函数并将自身注册到IOMMU核心框架中，以此通过IOMMU核心框架提供的API向整个内核提供IOMMU功能。所有的IOMMU设备都嵌入了一个<code>struct iommu_device</code>，iommu的核心代码只会操作这个结构体。可以看到，我们唯一需要关心的就是ops，这是iommu驱动注册到core中的回调函数。:</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>iommu_device</span> <span class=p>{</span>
+	<span class=k>struct</span> <span class=n>list_head</span> <span class=n>list</span><span class=p>;</span>
+	<span class=k>const</span> <span class=k>struct</span> <span class=n>iommu_ops</span> <span class=o>*</span><span class=n>ops</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>fwnode_handle</span> <span class=o>*</span><span class=n>fwnode</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>device</span> <span class=o>*</span><span class=n>dev</span><span class=p>;</span>
+<span class=p>};</span>
+
+<span class=cm>/**
+</span><span class=cm> * struct iommu_ops - iommu ops and capabilities
+</span><span class=cm> * @capable: check capability
+</span><span class=cm> * @domain_alloc: allocate iommu domain
+</span><span class=cm> * @domain_free: free iommu domain
+</span><span class=cm> * @attach_dev: attach device to an iommu domain
+</span><span class=cm> * @detach_dev: detach device from an iommu domain
+</span><span class=cm> * @map: map a physically contiguous memory region to an iommu domain
+</span><span class=cm> * @unmap: unmap a physically contiguous memory region from an iommu domain
+</span><span class=cm> * @flush_tlb_all: Synchronously flush all hardware TLBs for this domain
+</span><span class=cm> * @tlb_range_add: Add a given iova range to the flush queue for this domain
+</span><span class=cm> * @tlb_sync: Flush all queued ranges from the hardware TLBs and empty flush
+</span><span class=cm> *            queue
+</span><span class=cm> * @iova_to_phys: translate iova to physical address
+</span><span class=cm> * @add_device: add device to iommu grouping
+</span><span class=cm> * @remove_device: remove device from iommu grouping
+</span><span class=cm> * @device_group: find iommu group for a particular device
+</span><span class=cm> * @domain_get_attr: Query domain attributes
+</span><span class=cm> * @domain_set_attr: Change domain attributes
+</span><span class=cm> * @get_resv_regions: Request list of reserved regions for a device
+</span><span class=cm> * @put_resv_regions: Free list of reserved regions for a device
+</span><span class=cm> * @apply_resv_region: Temporary helper call-back for iova reserved ranges
+</span><span class=cm> * @domain_window_enable: Configure and enable a particular window for a domain
+</span><span class=cm> * @domain_window_disable: Disable a particular window for a domain
+</span><span class=cm> * @domain_set_windows: Set the number of windows for a domain
+</span><span class=cm> * @domain_get_windows: Return the number of windows for a domain
+</span><span class=cm> * @of_xlate: add OF master IDs to iommu grouping
+</span><span class=cm> * @pgsize_bitmap: bitmap of all possible supported page sizes
+</span><span class=cm> */</span>
+</code></pre></td></tr></table></div></div><p>iommu中的核心代码在<code>drivers/iommu/iommu.c</code>中实现，下面从一些基本的方面分析核心层提供的功能。由于一个运行的系统中只会同时存在几个iommu设备，因此设备管理实现比较简单，是由链表实现的。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=nf>LIST_HEAD</span><span class=p>(</span><span class=n>iommu_device_list</span><span class=p>);</span>
+<span class=k>static</span> <span class=nf>DEFINE_SPINLOCK</span><span class=p>(</span><span class=n>iommu_device_lock</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>注册和注销设备实质上就是操作这个链表。iommu向外提供的API不多，后面主要分析：</p><ul><li>iommu_map && iommu_unmap</li><li>iommu_domain_alloc && iommu_domain_free</li><li>iommu_attach_device && iommu_detach_device</li></ul><h2 id=iommu_domain_alloc>iommu_domain_alloc</h2><p>在我的理解中，domain这个词是从intel的VT-d文档中继承下来的，其他平台有各自的叫法如ARM下叫context。一个domain应该是指一个独立的iommu映射上下文。处于同一个domain中的设备使用同一套映射做地址转换（对于mmio来说就是独立的页表）。core层中使用<code>struct iommu_domain</code>表示一个domain：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span><span class=lnt>9
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>iommu_domain</span> <span class=p>{</span>
+	<span class=kt>unsigned</span> <span class=n>type</span><span class=p>;</span>
+	<span class=k>const</span> <span class=k>struct</span> <span class=n>iommu_ops</span> <span class=o>*</span><span class=n>ops</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>pgsize_bitmap</span><span class=p>;</span>	<span class=cm>/* Bitmap of page sizes in use */</span>
+	<span class=n>iommu_fault_handler_t</span> <span class=n>handler</span><span class=p>;</span>
+	<span class=kt>void</span> <span class=o>*</span><span class=n>handler_token</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>iommu_domain_geometry</span> <span class=n>geometry</span><span class=p>;</span>
+	<span class=kt>void</span> <span class=o>*</span><span class=n>iova_cookie</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>后面分析各个字段的含义。注释中提到了内核支持的domain类型：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cm>/*
+</span><span class=cm> * This are the possible domain-types
+</span><span class=cm> *
+</span><span class=cm> *	IOMMU_DOMAIN_BLOCKED	- All DMA is blocked, can be used to isolate
+</span><span class=cm> *				  devices
+</span><span class=cm> *	IOMMU_DOMAIN_IDENTITY	- DMA addresses are system physical addresses
+</span><span class=cm> *	IOMMU_DOMAIN_UNMANAGED	- DMA mappings managed by IOMMU-API user, used
+</span><span class=cm> *				  for VMs
+</span><span class=cm> *	IOMMU_DOMAIN_DMA	- Internally used for DMA-API implementations.
+</span><span class=cm> *				  This flag allows IOMMU drivers to implement
+</span><span class=cm> *				  certain optimizations for these domain
+</span><span class=cm> */</span>
+</code></pre></td></tr></table></div></div><p>这个函数仅仅就是调用ops中驱动注册的<code>domain_alloc</code>回调函数分配一个iommu_domain，从这里看书每个驱动也是要提供自己的domain类型并把<code>struct iommu_domain</code>嵌入进取的。</p><h2 id=iommu_attach_device>iommu_attach_device</h2><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>int</span> <span class=nf>iommu_attach_device</span><span class=p>(</span><span class=k>struct</span> <span class=n>iommu_domain</span> <span class=o>*</span><span class=n>domain</span><span class=p>,</span> <span class=k>struct</span> <span class=n>device</span> <span class=o>*</span><span class=n>dev</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>从函数原型中可以看出该函数的操作对象是一个domain和一个设备，联想函数名称可以认为该函数是将一个设备添加到一个domain中。但事实上还是有些偏差的，该函数实际上将设备所在的Group与该domain绑定。值得一提的是，如果函数发现设备存在的Group中存在多个设备，则不进行绑定操作。总结下来，该操作针对独立设备（即所在Group里只有自己），将设备所在Group与domain进行绑定。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=k>if</span> <span class=p>(</span><span class=n>iommu_group_device_count</span><span class=p>(</span><span class=n>group</span><span class=p>)</span> <span class=o>!=</span> <span class=mi>1</span><span class=p>)</span>
+		<span class=k>goto</span> <span class=n>out_unlock</span><span class=p>;</span>
+
+	<span class=n>ret</span> <span class=o>=</span> <span class=n>__iommu_attach_group</span><span class=p>(</span><span class=n>domain</span><span class=p>,</span> <span class=n>group</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p><code>__iommu_attach_group</code>遍历Group中所有的设备，并调用<code>__iommu_attach_device</code>。该函数首先通过<code>domain->ops</code>中的is_attach_deffered检查是否延后进行attach操作。然后调用ops中的attach_dev函数将设备绑定到该domain中去。这里需要注意区分Group中default_domain和domain的概念：domain指group当前所在的domain，而default_domain指Group默认应该在的domain。进行attach操作时，会检查default_domain是否与domain相同，以此判断该Group是否已经attach到别的domain上了，在该情况下返回<code>-EBUSY</code>。</p><h2 id=iommu_detach_device>iommu_detach_device</h2><p>该函数与上面的<code>iommu_attach_device</code>几乎完全相反，并且该函数也是操作独立设备。这里注意如果Group有自己的default_domain，那么该函数在detach完成之后会重新attach到default_domain上。</p><h2 id=iommu_map>iommu_map</h2><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>int</span> <span class=nf>iommu_map</span><span class=p>(</span><span class=k>struct</span> <span class=n>iommu_domain</span> <span class=o>*</span><span class=n>domain</span><span class=p>,</span> <span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>iova</span><span class=p>,</span>
+	      <span class=n>phys_addr_t</span> <span class=n>paddr</span><span class=p>,</span> <span class=n>size_t</span> <span class=n>size</span><span class=p>,</span> <span class=kt>int</span> <span class=n>prot</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>函数原型上可以看出来是用于映射domain内的iova，将长度为<code>size</code>以<code>iova</code>为起始地址的iova区域映射到以paddr为起始地址的物理地址。该函数只能用于<code>UNMANAGED</code>类型和<code>DMA</code>类型的domain。<code>domain->pgsize_bitmap</code>是一个bitmap，用于记录domain支持的最小page大小。iommu_map函数进行操作时，是以page为单位的，page大小不固定可以根据需要使用不同大小的page，在同一次iommu_map操作中也不要求page大小一致。最终一个page的映射是调用iommu->ops中的map回调函数实现的。</p><h2 id=iommu_iova_to_phys>iommu_iova_to_phys</h2><p>该函数调用<code>domain->ops</code>中提供的<code>iova_to_phys</code>回调函数将iova转换成物理地址。</p><p>TODO dma integration</p><h2 id=iommu-group>IOMMU Group</h2><p>啃了两天PCIE协议，对IOMMU的Group概念也有了一定的理解。从内核角度来看Group是一组设备，是IOMMU可以辨别的最小单位，即IOMMU无法区分出一个Group中的设备。区分标准是什么呢，IO地址空间。以PCIE总线来举一个例子，我们知道PCIE是一个点对点的协议，如果一个多function设备挂到了一个不支持ACS的bridge下，那么这两个function可以通过该bridge进行通信。这样的通信直接由bridge进行转发而无需通过Root Complex，自然也就无需通过IOMMU。这种情况下，这两个function的IOVA无法完全通过IOMMU隔离开，所以他们需要分到同一个Group中。同一个Group的设备应该是公用一个domain的。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>iommu_group</span> <span class=p>{</span>
+	<span class=k>struct</span> <span class=n>kobject</span> <span class=n>kobj</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>kobject</span> <span class=o>*</span><span class=n>devices_kobj</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>list_head</span> <span class=n>devices</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>mutex</span> <span class=n>mutex</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>blocking_notifier_head</span> <span class=n>notifier</span><span class=p>;</span>
+	<span class=kt>void</span> <span class=o>*</span><span class=n>iommu_data</span><span class=p>;</span>
+	<span class=kt>void</span> <span class=p>(</span><span class=o>*</span><span class=n>iommu_data_release</span><span class=p>)(</span><span class=kt>void</span> <span class=o>*</span><span class=n>iommu_data</span><span class=p>);</span>
+	<span class=kt>char</span> <span class=o>*</span><span class=n>name</span><span class=p>;</span>
+	<span class=kt>int</span> <span class=n>id</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>iommu_domain</span> <span class=o>*</span><span class=n>default_domain</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>iommu_domain</span> <span class=o>*</span><span class=n>domain</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>从iommu_group的结构中可以发现，devices列表保存group中设备。一个group需要关联两个iommu_domain，除此之外支持内核中其他组件向该group中注册listener。default_domain保存的是默认该设备应该位于的domain，而domain字段保存设备当前所在的domain。</p><h3 id=iommu_group_add_device>iommu_group_add_device</h3><p>该函数将一个设备加入一个Group，函数的主要操作如下：</p><ul><li>处理sysfs相关的事项，如建立iommu_group符号链接</li><li>将设备的iommu_group字段设置为这个Group</li><li>调用iommu_group_create_direct_mappings建立设备的iova映射</li><li>将设备加入到Group内的list里</li><li>通知所有注册到Group里的listener有设备加入</li></ul><p>TODO: iommu_group_create_direct_mappings</p><h3 id=iommu_group_get_for_dev>iommu_group_get_for_dev</h3><p>该函数获取一个设备所在的Group，如果设备不属于任何一个Group，则调用IOMMU驱动提供的<code>device_group</code>回调函数尝试进行获取。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>group</span> <span class=o>=</span> <span class=n>iommu_group_get</span><span class=p>(</span><span class=n>dev</span><span class=p>);</span>
+	<span class=k>if</span> <span class=p>(</span><span class=n>group</span><span class=p>)</span>
+		<span class=k>return</span> <span class=n>group</span><span class=p>;</span>
+
+	<span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=n>ops</span><span class=p>)</span>
+		<span class=k>return</span> <span class=n>ERR_PTR</span><span class=p>(</span><span class=o>-</span><span class=n>EINVAL</span><span class=p>);</span>
+
+	<span class=n>group</span> <span class=o>=</span> <span class=n>ops</span><span class=o>-&gt;</span><span class=n>device_group</span><span class=p>(</span><span class=n>dev</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>随后，为获取的Group设置domain，最后将设备加入Group。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=n>group</span><span class=o>-&gt;</span><span class=n>default_domain</span><span class=p>)</span> <span class=p>{</span>
+		<span class=k>struct</span> <span class=n>iommu_domain</span> <span class=o>*</span><span class=n>dom</span><span class=p>;</span>
+
+		<span class=n>dom</span> <span class=o>=</span> <span class=n>__iommu_domain_alloc</span><span class=p>(</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>bus</span><span class=p>,</span> <span class=n>iommu_def_domain_type</span><span class=p>);</span>
+		<span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=n>dom</span> <span class=o>&amp;&amp;</span> <span class=n>iommu_def_domain_type</span> <span class=o>!=</span> <span class=n>IOMMU_DOMAIN_DMA</span><span class=p>)</span> <span class=p>{</span>
+			<span class=n>dev_warn</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span>
+				 <span class=s>&#34;failed to allocate default IOMMU domain of type %u; falling back to IOMMU_DOMAIN_DMA&#34;</span><span class=p>,</span>
+				 <span class=n>iommu_def_domain_type</span><span class=p>);</span>
+			<span class=n>dom</span> <span class=o>=</span> <span class=n>__iommu_domain_alloc</span><span class=p>(</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>bus</span><span class=p>,</span> <span class=n>IOMMU_DOMAIN_DMA</span><span class=p>);</span>
+		<span class=p>}</span>
+
+		<span class=n>group</span><span class=o>-&gt;</span><span class=n>default_domain</span> <span class=o>=</span> <span class=n>dom</span><span class=p>;</span>
+		<span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=n>group</span><span class=o>-&gt;</span><span class=n>domain</span><span class=p>)</span>
+			<span class=n>group</span><span class=o>-&gt;</span><span class=n>domain</span> <span class=o>=</span> <span class=n>dom</span><span class=p>;</span>
+	<span class=p>}</span>
+</code></pre></td></tr></table></div></div><h2 id=bus-integration>Bus integration</h2><p>每一个<code>struct device</code>中保存了一个<code>struct iommu_group</code>的指针，用以获取该设备处于的group。除此之外，内核需要其他方式将iommu功能集成到总线中。很明显，一个iommu设备是作用于一个或者多个总线上的，那么就需要一个自然的方式管理与iommu相关的功能。首先明确<code>struct bus</code>中存在一个iommu_ops用于保存当前bus上生效的iommu驱动注册的iommu_ops。同时可以根据这个指针是否为NULL确认这个bus中是否支持iommu功能。</p><p>iommu核心框架中提供了<code>bus_set_iommu</code>函数，该函数可以被iommu驱动调用，用以将自身挂入到 对应总线中。函数中除了设置iommu_ops指针之外，还进行了两个工作：</p><ul><li>向bus中注册一个listener：对于bus上设备的插入与移除的设备，调用iommu_ops中对应的add_device和remove_device回调函数。对于bus接收到的其他设备事件（如bind，unbind等），则将其传播给该设备所处于的group中。</li><li>对于bus中已经存在的设备，则挨个调用<code>add_device</code>将其纳入iommu的管辖，并设置其group</li></ul><h3 id=iommu_fwspec>iommu_fwspec</h3><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>iommu_fwspec</span> <span class=p>{</span>
+	<span class=k>const</span> <span class=k>struct</span> <span class=n>iommu_ops</span>	<span class=o>*</span><span class=n>ops</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>fwnode_handle</span>	<span class=o>*</span><span class=n>iommu_fwnode</span><span class=p>;</span>
+	<span class=kt>void</span>			<span class=o>*</span><span class=n>iommu_priv</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>int</span>		<span class=n>num_ids</span><span class=p>;</span>
+	<span class=n>u32</span>			<span class=n>ids</span><span class=p>[</span><span class=mi>1</span><span class=p>];</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><h2 id=iommu-domain>IOMMU Domain</h2><p>每一个domain即代表一个iommu映射地址空间，即一个page table。一个Group逻辑上是需要与domain进行绑定的，即一个Group中的所有设备都位于一个domain中。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span><span class=lnt>9
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>iommu_domain</span> <span class=p>{</span>
+	<span class=kt>unsigned</span> <span class=n>type</span><span class=p>;</span>
+	<span class=k>const</span> <span class=k>struct</span> <span class=n>iommu_ops</span> <span class=o>*</span><span class=n>ops</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>pgsize_bitmap</span><span class=p>;</span>	<span class=cm>/* Bitmap of page sizes in use */</span>
+	<span class=n>iommu_fault_handler_t</span> <span class=n>handler</span><span class=p>;</span>
+	<span class=kt>void</span> <span class=o>*</span><span class=n>handler_token</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>iommu_domain_geometry</span> <span class=n>geometry</span><span class=p>;</span>
+	<span class=kt>void</span> <span class=o>*</span><span class=n>iova_cookie</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><h1 id=smmu硬件及驱动分析>SMMU硬件及驱动分析</h1><p>看代码要点：</p><ul><li>一定要看文档，SMMU是一个比较简单的设备，他的Spec只有300页</li><li>fault分为global和context，global基本上就是smmu本身的一些fault，而context是smmu在进行地址转换时出现的fault</li></ul><p>开始分析代码，我认为需要从中断处理入手，这也是错误信息的入口。先看context fault的处理函数，代码不贴了基本就是打出相关的寄存器信息，没有什么参考意义。我认为有意义的地方是这个中断是怎么注册的，即驱动是如何管理io domain的。这就涉及通用的IOMMU框架代码了。</p><p>可以发现<code>arm_smmu_attach_dev</code>函数中将一个设备添加到一个特定的iommu domain中。函数中调用<code>arm_smmu_init_domain_context</code>函数注册了这个中断。对于每一个<code>struct device</code>，其内部有一个<code>iommu_group</code>字段保存其所在的Group。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=k>struct</span> <span class=n>iommu_ops</span> <span class=n>arm_smmu_ops</span> <span class=o>=</span> <span class=p>{</span>
+	<span class=p>.</span><span class=n>capable</span>		<span class=o>=</span> <span class=n>arm_smmu_capable</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>domain_alloc</span>		<span class=o>=</span> <span class=n>arm_smmu_domain_alloc</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>domain_free</span>		<span class=o>=</span> <span class=n>arm_smmu_domain_free</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>attach_dev</span>		<span class=o>=</span> <span class=n>arm_smmu_attach_dev</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>map</span>			<span class=o>=</span> <span class=n>arm_smmu_map</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>unmap</span>			<span class=o>=</span> <span class=n>arm_smmu_unmap</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>flush_iotlb_all</span>	<span class=o>=</span> <span class=n>arm_smmu_iotlb_sync</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>iotlb_sync</span>		<span class=o>=</span> <span class=n>arm_smmu_iotlb_sync</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>iova_to_phys</span>		<span class=o>=</span> <span class=n>arm_smmu_iova_to_phys</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>add_device</span>		<span class=o>=</span> <span class=n>arm_smmu_add_device</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>remove_device</span>		<span class=o>=</span> <span class=n>arm_smmu_remove_device</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>device_group</span>		<span class=o>=</span> <span class=n>arm_smmu_device_group</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>domain_get_attr</span>	<span class=o>=</span> <span class=n>arm_smmu_domain_get_attr</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>domain_set_attr</span>	<span class=o>=</span> <span class=n>arm_smmu_domain_set_attr</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>of_xlate</span>		<span class=o>=</span> <span class=n>arm_smmu_of_xlate</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>get_resv_regions</span>	<span class=o>=</span> <span class=n>arm_smmu_get_resv_regions</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>put_resv_regions</span>	<span class=o>=</span> <span class=n>arm_smmu_put_resv_regions</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>pgsize_bitmap</span>		<span class=o>=</span> <span class=o>-</span><span class=mi>1UL</span><span class=p>,</span> <span class=cm>/* Restricted during device attach */</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>由于前面已经分析了IOMMU核心框架，熟悉了IOMMU核心框架如何与IOMMU驱动如何互动。这里分析流程即为以一个设备的IOMMU操作周期为基准分析SMMU驱动向IOMMU核心框架注册回调函数。</p><h2 id=stream-mapping管理>Stream Mapping管理</h2><p>首先提及一些Spec中定义的名词：</p><ul><li>Steam翻译成中文是流的意思。在SMMU中特指Master设备向SMMU发起的请求流。StreamID即为SMMU用以辨别不同Stream用的编号，注意Stream和设备不是一一对应的关系。</li><li>Stream Mapping在Spec中特指将StreamID映射到Stream Context（接近domain的概念）这一操作行为。</li></ul><p>代码中SME应该是<code>Stream Mapping Entry</code>的缩写。Spec中提及到三种Stream Mapping的方式，这里主要提及Stream Indexing<code>和</code>Stream Matching`两种。</p><h2 id=arm_smmu_add_device>arm_smmu_add_device</h2><p>这个函数即为<code>add_device</code>回调函数。回忆前面的分析，IOMMU核心框架向bus中注册listener，每当bus中新增设备时，即会调用该函数。从这里看，该函数的主要功能就是将一个设备纳入到IOMMU驱动的管理中。该函数的核心参数就是被传入的<code>struct device</code>结构体中保存的<code>struct iommu_fwspec</code>。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cm>/**
+</span><span class=cm> * struct iommu_fwspec - per-device IOMMU instance data
+</span><span class=cm> * @ops: ops for this device&#39;s IOMMU
+</span><span class=cm> * @iommu_fwnode: firmware handle for this device&#39;s IOMMU
+</span><span class=cm> * @iommu_priv: IOMMU driver private data for this device
+</span><span class=cm> * @num_ids: number of associated device IDs
+</span><span class=cm> * @ids: IDs which this device may present to the IOMMU
+</span><span class=cm> */</span>
+<span class=k>struct</span> <span class=n>iommu_fwspec</span> <span class=p>{</span>
+	<span class=k>const</span> <span class=k>struct</span> <span class=n>iommu_ops</span>	<span class=o>*</span><span class=n>ops</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>fwnode_handle</span>	<span class=o>*</span><span class=n>iommu_fwnode</span><span class=p>;</span>
+	<span class=kt>void</span>			<span class=o>*</span><span class=n>iommu_priv</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>int</span>		<span class=n>num_ids</span><span class=p>;</span>
+	<span class=n>u32</span>			<span class=n>ids</span><span class=p>[</span><span class=mi>1</span><span class=p>];</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>该参数是从ACPI或者设备树中得到的，用以描述设备绑定的IOMMU及拓扑关系。这里需要注意该关系必须遵循硬件设计，不然很明显是无法正常工作的。函数为设备内分配了一个<code>arm_smmu_master_cfg</code>结构体，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>arm_smmu_master_cfg</span> <span class=p>{</span>
+	<span class=k>struct</span> <span class=n>arm_smmu_device</span>		<span class=o>*</span><span class=n>smmu</span><span class=p>;</span>
+	<span class=n>s16</span>				<span class=n>smendx</span><span class=p>[];</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>并保存在iommu_fwspec中的<code>iommu_priv</code>指针中。该结构体从名字上就能看出是Master设备的配置，Master这个名词在Spec中是指Bus Master，即可以发起总线请求的设备。函数的核心操作由<code>arm_smmu_master_alloc_smes</code>完成，从名字可以看出是为设备分配Stream Mapping中的表项。对于每一个与设备关联的StreamID，都需要分配一个Stream Mapping中的表项：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>		<span class=n>ret</span> <span class=o>=</span> <span class=n>arm_smmu_find_sme</span><span class=p>(</span><span class=n>smmu</span><span class=p>,</span> <span class=n>sid</span><span class=p>,</span> <span class=n>mask</span><span class=p>);</span>
+		<span class=k>if</span> <span class=p>(</span><span class=n>ret</span> <span class=o>&lt;</span> <span class=mi>0</span><span class=p>)</span>
+			<span class=k>goto</span> <span class=n>out_err</span><span class=p>;</span>
+
+		<span class=n>idx</span> <span class=o>=</span> <span class=n>ret</span><span class=p>;</span>
+		<span class=k>if</span> <span class=p>(</span><span class=n>smrs</span> <span class=o>&amp;&amp;</span> <span class=n>smmu</span><span class=o>-&gt;</span><span class=n>s2crs</span><span class=p>[</span><span class=n>idx</span><span class=p>].</span><span class=n>count</span> <span class=o>==</span> <span class=mi>0</span><span class=p>)</span> <span class=p>{</span>
+			<span class=n>smrs</span><span class=p>[</span><span class=n>idx</span><span class=p>].</span><span class=n>id</span> <span class=o>=</span> <span class=n>sid</span><span class=p>;</span>
+			<span class=n>smrs</span><span class=p>[</span><span class=n>idx</span><span class=p>].</span><span class=n>mask</span> <span class=o>=</span> <span class=n>mask</span><span class=p>;</span>
+			<span class=n>smrs</span><span class=p>[</span><span class=n>idx</span><span class=p>].</span><span class=n>valid</span> <span class=o>=</span> <span class=nb>true</span><span class=p>;</span>
+		<span class=p>}</span>
+		<span class=n>smmu</span><span class=o>-&gt;</span><span class=n>s2crs</span><span class=p>[</span><span class=n>idx</span><span class=p>].</span><span class=n>count</span><span class=o>++</span><span class=p>;</span>
+		<span class=n>cfg</span><span class=o>-&gt;</span><span class=n>smendx</span><span class=p>[</span><span class=n>i</span><span class=p>]</span> <span class=o>=</span> <span class=p>(</span><span class=n>s16</span><span class=p>)</span><span class=n>idx</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>这里的操作简明易懂，唯一需要注意的就是表项的分配方式。首先搜索整个表中是否存在完全匹配（即集合意义上的包含）的表项，如果存在则使用该表项，否则使用表中第一个发现的空表项。到这里可以发现<code>arm_smmu_master_cfg</code>中的smendx即为保存该Master设备对应的Stream Mapping表项。表项申请完毕后，其实质上还是没有写入到SMMU的mmio空间去的，写入的话这个表项应该就生效了。但是软件上还是没有准备完毕的，这个设备没有加入任何Group或者domain。这里可以看到：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>group</span> <span class=o>=</span> <span class=n>iommu_group_get_for_dev</span><span class=p>(</span><span class=n>dev</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>这个函数是IOMMU核心框架提供的函数，函数最终还是会调用到<code>device_group</code>回调函数。这里我们只需要明确这个函数确定设备属于哪一个Group。最后，为了使表项立马生效，将其写入到S2CR寄存器中：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>for_each_cfg_sme</span><span class=p>(</span><span class=n>fwspec</span><span class=p>,</span> <span class=n>i</span><span class=p>,</span> <span class=n>idx</span><span class=p>)</span> <span class=p>{</span>
+		<span class=n>arm_smmu_write_sme</span><span class=p>(</span><span class=n>smmu</span><span class=p>,</span> <span class=n>idx</span><span class=p>);</span>
+		<span class=n>smmu</span><span class=o>-&gt;</span><span class=n>s2crs</span><span class=p>[</span><span class=n>idx</span><span class=p>].</span><span class=n>group</span> <span class=o>=</span> <span class=n>group</span><span class=p>;</span>
+	<span class=p>}</span>
+</code></pre></td></tr></table></div></div><h2 id=arm_smmu_device_group>arm_smmu_device_group</h2><p>该函数为device_group回调函数，目的是获取一个设备的Group。函数的操作也比较简单：</p><ul><li>sanity check：检查设备所有SME是否都位于同一个Group</li><li>如果设备已经有一个Group，那么返回该Group</li><li>设备没有Group的情况下，则需为设备分配一个Group。对于PCI设备调用<code>pci_device_group</code>，对于其他设备则为<code>generic_device_group</code></li></ul><h2 id=arm_smmu_domain_alloc>arm_smmu_domain_alloc</h2><p>该函数为<code>domain_alloc</code>回调函数，其目的是申请一个domain。SMMU驱动只支持三种domain：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=k>if</span> <span class=p>(</span><span class=n>type</span> <span class=o>!=</span> <span class=n>IOMMU_DOMAIN_UNMANAGED</span> <span class=o>&amp;&amp;</span>
+	    <span class=n>type</span> <span class=o>!=</span> <span class=n>IOMMU_DOMAIN_DMA</span> <span class=o>&amp;&amp;</span>
+	    <span class=n>type</span> <span class=o>!=</span> <span class=n>IOMMU_DOMAIN_IDENTITY</span><span class=p>)</span>
+		<span class=k>return</span> <span class=nb>NULL</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>剩下的就是申请内存，初始化一些数据结构了，貌似有一些看着比较关键的字段是空着的。后面可以看到这个时候申请的domain仅仅是占位用的，没有什么实际意义。在调用attach_dev时，会初始化domain context。驱动通过<code>struct arm_smmu_domain</code>里的smmu字段判断context是否已经初始化。</p><h2 id=arm_smmu_attach_dev>arm_smmu_attach_dev</h2><p>这里的实现细节是，一个设备的绑定的SMMU与其Stream Mappings已经在<code>add_device</code>回调函数中确定好了。attach_dev的实际操作就是根据设备保存的这些信息初始化domain。初始化domain context由<code>arm_smmu_init_domain_context</code>函数完成，该函数满满的硬件细节，后续需要专门讨论。一个domain在SMMU硬件中实际对应的概念就是Context Bank，在使用Stream Matching的情况下，一共存在三层映射：StreamID && Mask -> S2CR寄存器 -> Context Bank。因此，初始化完domain（即Context Bank）后需要设置当前设备在Stream Mapping中对应的S2CR寄存器，使其指向该domain对应的Context Bank。</p></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2020-02-20</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/kernel/>kernel</a>
+<a href=/crab2313.github.io/tags/iommu/>iommu</a>
+<a href=/crab2313.github.io/tags/arm/>arm</a></div><nav class=post-nav><a class=prev href=crab2313.github.io/post/ttm/><i class="iconfont icon-left"></i>
+<span class="prev-text nav-default">TTM内存分配器分析</span>
+<span class="prev-text nav-mobile">上一篇</span></a>
+<a class=next href=crab2313.github.io/post/pci/><span class="next-text nav-default">PCI驱动框架分析</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>

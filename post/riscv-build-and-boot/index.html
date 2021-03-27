@@ -1,0 +1,319 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>Linux内核在RISC-V架构下的构建与启动 - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="本文分析RISC-V的linux移植是如何完成的，并给出具体的入手方法，希望对后来者有所启发。RISC-V是一个比较新的体系结构，截至目前已"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/riscv-build-and-boot/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="Linux内核在RISC-V架构下的构建与启动"><meta property="og:description" content="本文分析RISC-V的linux移植是如何完成的，并给出具体的入手方法，希望对后来者有所启发。RISC-V是一个比较新的体系结构，截至目前已"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/riscv-build-and-boot/"><meta property="article:section" content="post"><meta property="article:published_time" content="2020-07-25T00:00:00+00:00"><meta property="article:modified_time" content="2020-07-25T00:00:00+00:00"><meta itemprop=name content="Linux内核在RISC-V架构下的构建与启动"><meta itemprop=description content="本文分析RISC-V的linux移植是如何完成的，并给出具体的入手方法，希望对后来者有所启发。RISC-V是一个比较新的体系结构，截至目前已"><meta itemprop=datePublished content="2020-07-25T00:00:00+00:00"><meta itemprop=dateModified content="2020-07-25T00:00:00+00:00"><meta itemprop=wordCount content="6927"><meta itemprop=keywords content="kernel,risc-v,"><meta name=twitter:card content="summary"><meta name=twitter:title content="Linux内核在RISC-V架构下的构建与启动"><meta name=twitter:description content="本文分析RISC-V的linux移植是如何完成的，并给出具体的入手方法，希望对后来者有所启发。RISC-V是一个比较新的体系结构，截至目前已"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>Linux内核在RISC-V架构下的构建与启动</h1><div class=post-meta><span class=post-time>2020-07-25</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><ul><li><a href=#内核的构建>内核的构建</a></li><li><a href=#内核启动>内核启动</a><ul><li><a href=#_start_kernel>_start_kernel</a></li><li><a href=#setup_vm与relocate>setup_vm与relocate</a></li><li><a href=#临时内核栈与task_struct>临时内核栈与task_struct</a></li></ul></li></ul></li></ul></nav></div></div><div class=post-content><p>本文分析RISC-V的linux移植是如何完成的，并给出具体的入手方法，希望对后来者有所启发。RISC-V是一个比较新的体系结构，截至目前已经完成了非特权级Spec和特权级Spec（不包含hypervisor）的修订，由于后发优势，加上设计得当，RISC-V的设计相当简洁易懂，是学习体系结构以及Linux内核的良好素材。借助RISC-V，我们可以通读与RISC-V体系结构相关的Linux内核代码，这在其他体系结构上对于初学者是很难做到的。</p><p>首先我们需要通读RISC-V的手册，两本加起来不到三百页，对于稍有基础的人来说可能只需要两天就能够读完。RISC-V的汇编语言也非常简洁，设计独到，简化了程序开发人员的许多工作，推荐目前正在施工的<a href=https://github.com/riscv/riscv-asm-manual/blob/master/riscv-asm.md>官方教程</a>。本文尽量假定读者不熟悉内核的一些tricks，会做适当说明，至少会给出对应关键字，用以查找学习。</p><p>体系结构相关代码一般放置于<code>arch/${arch}/</code>文件夹下，主要涉及内核中与体系结构相关的部分，每个文件夹下的内容只在特定的体系结构中使用。我们主要研究其中的如下部分：</p><ul><li>内核的构建</li><li>内核的启动</li><li>内核体系结构相关函数的实现</li><li>内存一致性模型的映射</li></ul><h2 id=内核的构建>内核的构建</h2><p>很多与内核相关的书中都没有具体提到内核是如何构建的，最多介绍一下内核的大致内存布局。这里我主要介绍一下内核构建的大致原理。这里涉及的大部分内容实质上为ELF格式、编译器、链接器以及装载器的原理。Linux内核实质上为一个巨大的二进制可执行文件，这个可执行文件的格式一般是不确定的，与体系结构有关。这个格式实质上是与bootloader的约定，bootloader可以检测并识别特定的内核格式，然后将其装载到内存中并执行。这个约定一般被明确写在<code>Documentation/${arch}/</code>下的某个文件中，被称作<code>Boot Protocol</code>，即启动协议。特化到RISC-V体系结构，这个格式为与ARM64体系结构相同的PE格式，该格式的一个显著优势是可以作为UEFI Executable由UEFI直接执行，即我们熟知的UEFI stub启动方式。</p><p>熟悉了上面的概念后，我们来看内核的<code>Makefile</code>是如何生成RISC-V下的内核的。首先找到最显眼的文件<code>arch/riscv/Makefile</code>，可以看到如下定义：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-makefile data-lang=makefile><span class=c># Default target when executing plain make
+</span><span class=c></span><span class=nv>boot</span>            <span class=o>:=</span> arch/riscv/boot
+<span class=nv>KBUILD_IMAGE</span>    <span class=o>:=</span> <span class=k>$(</span>boot<span class=k>)</span>/Image.gz
+
+<span class=err>...</span>
+
+<span class=err>ifeq</span> <span class=err>(</span><span class=k>$(</span><span class=nv>CONFIG_RISCV_M_MODE</span><span class=k>)$(</span><span class=nv>CONFIG_SOC_KENDRYTE</span><span class=k>)</span><span class=err>,yy)</span>
+<span class=nv>KBUILD_IMAGE</span> <span class=o>:=</span> <span class=k>$(</span>boot<span class=k>)</span>/loader.bin
+<span class=err>else</span>
+<span class=nv>KBUILD_IMAGE</span> <span class=o>:=</span> <span class=k>$(</span>boot<span class=k>)</span>/Image.gz
+<span class=err>endif</span>
+<span class=nv>BOOT_TARGETS</span> <span class=o>:=</span> Image Image.gz loader loader.bin
+
+<span class=nf>all</span><span class=o>:</span>    <span class=k>$(</span><span class=nv>notdir</span> <span class=k>$(</span><span class=nv>KBUILD_IMAGE</span><span class=k>))</span>
+
+<span class=nf>$(BOOT_TARGETS)</span><span class=o>:</span> <span class=n>vmlinux</span>
+        <span class=k>$(</span>Q<span class=k>)$(</span>MAKE<span class=k>)</span> <span class=k>$(</span>build<span class=k>)</span><span class=o>=</span><span class=k>$(</span>boot<span class=k>)</span> <span class=k>$(</span>boot<span class=k>)</span>/<span class=nv>$@</span>
+        @<span class=k>$(</span>kecho<span class=k>)</span> <span class=s1>&#39;  Kernel: $(boot)/$@ is ready&#39;</span>
+</code></pre></td></tr></table></div></div><p>不难得出如下结论：</p><ul><li>在非勘智SOC（K210）下，默认执行make后生成的文件为<code>Image.gz</code></li><li>对于由<code>BOOT_TARGETS</code>中定义的几种镜像名称，可以在<code>arch/riscv/boot</code>下的<code>Makefile</code>中找到生成方式</li></ul><p>我们现在就来看<code>Image</code>是如何生成的：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-makefile data-lang=makefile><span class=nv>OBJCOPYFLAGS_Image</span> <span class=o>:=</span>-O binary -R .note -R .note.gnu.build-id -R .comment -S
+
+<span class=nf>$(obj)/Image</span><span class=o>:</span> <span class=n>vmlinux</span> <span class=n>FORCE</span>
+        <span class=k>$(</span>call if_changed,objcopy<span class=k>)</span>
+
+<span class=nf>$(obj)/Image.gz</span><span class=o>:</span> <span class=k>$(</span><span class=nv>obj</span><span class=k>)</span>/<span class=n>Image</span> <span class=n>FORCE</span>
+        <span class=k>$(</span>call if_changed,gzip<span class=k>)</span>
+</code></pre></td></tr></table></div></div><p>可以看到<code>Image</code>实质上就是由vmlinux通过<code>objcopy -O binary</code>生成的binary格式。具有嵌入式开发经验的人对这个操作会比较熟悉，binary格式实质上就是ELF装载到内存后的内存dump，即以ELF起始装载地址指向的物理地址为起始地址的整片内存区域转储。而这样就比较有趣了，看到这里你一定能猜出<code>vmlinux</code>用了什么特殊手段将其内存布局安排的明明白白，使其通过objcopy后，可以得到一个PE格式的可执行程序。这个手段就是<strong>链接脚本</strong>。</p><p>关于链接脚本的解读就不赘述了，建议通读<code>GNU ld</code>的文档。我们可以在<code>arch</code>文件夹下找到生成链接脚本的模板文件：<code>arch/riscv/kernel/vmlinux.ld.S</code>。之所以称其为模板文件，是因为这个文件通过C语言的预处理后，可以生成最终的链接脚本<code>vmlinux.ld</code>。脚本的内容比较简单，我们先来看前几行：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm><span class=nf>OUTPUT_ARCH</span><span class=p>(</span><span class=no>riscv</span><span class=p>)</span>
+<span class=nf>ENTRY</span><span class=p>(</span><span class=no>_start</span><span class=p>)</span>
+
+<span class=nf>jiffies</span> <span class=err>=</span> <span class=no>jiffies_64</span><span class=c>;
+</span></code></pre></td></tr></table></div></div><p>这几行比较常规，可以知道：</p><ul><li>输出的ELF为riscv体系结构</li><li>输出的ELF的entry point为<code>_start</code>符号的地址</li><li>符号<code>jiffies</code>与<code>jiffies_64</code>共用一个地址。这里可以参考其它文档中对于时间子系统的描述，这个trick可以让我们在内核中通过<code>jiffies</code>变量访问<code>jiffies_64</code>变量的低32位。</li></ul><p>接下来就是最关键的部分：<code>SECTIONS</code>定义，它能精确控制链接器的行为，按照你的需求合并section，并控制内存布局。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define LOAD_OFFSET PAGE_OFFSET
+</span><span class=cp>#include</span> <span class=cpf>&lt;asm/vmlinux.lds.h&gt;</span><span class=cp>
+</span><span class=cp></span>
+<span class=p>...</span>
+
+<span class=n>SECTIONS</span>
+<span class=p>{</span>
+        <span class=cm>/* Beginning of code and text segment */</span>
+        <span class=p>.</span> <span class=o>=</span> <span class=n>LOAD_OFFSET</span><span class=p>;</span>
+        <span class=n>_start</span> <span class=o>=</span> <span class=p>.;</span>
+        <span class=n>HEAD_TEXT_SECTION</span>
+        <span class=p>.</span> <span class=o>=</span> <span class=n>ALIGN</span><span class=p>(</span><span class=n>PAGE_SIZE</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>可以看到，整个内存的布局由<code>LOAD_OFFSET</code>，即<code>PAGE_OFFSET</code>地址开始，而<code>PAGE_OFFSET</code>大部分书中都有所涉及，这里不再提它是什么。我们可以看到<code>_start</code>符号的地址被定义为<code>PAGE_OFFSET</code>，即vmlinux虚拟地址空间的最开头，这也是其名字的由来，在内核中可以通过<code>&_start</code>获取其地址。</p><p>如果对ELF格式有一定理解，这一段可以跳过不看。这里<code>SECTIONS</code>中定义的是虚拟内存的布局，事实上ELF格式中是严格区分物理地址（在链接器的定义中称为装载地址<code>LMA</code>）和虚拟地址的，这一点要铭记。在大多数情况下，这两个地址是相同的，但由于内核会将其位于的物理地址通过页表映射到PAGE_OFFSET上位置（不是绝对，有偏移量随机化实现），所以需要严格区分这两种情况。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cm>/* Section used for early init (in .S files) */</span>
+<span class=cp>#define HEAD_TEXT  KEEP(*(.head.text))
+</span><span class=cp></span>
+<span class=cp>#define HEAD_TEXT_SECTION                                                       \
+</span><span class=cp>        .head.text : AT(ADDR(.head.text) - LOAD_OFFSET) {               \
+</span><span class=cp>                HEAD_TEXT                                               \
+</span><span class=cp>        }
+</span></code></pre></td></tr></table></div></div><p><code>HEAD_TEXT_SECTION</code>定义如上，很简单，即将所有<code>.o</code>文件名为<code>.head.text</code>的section合并成vmlinux名为<code>.head.text</code>的section。这里注意两个trick：</p><ul><li>链接脚本中可以通过AT属性指定section的装载地址，这里可以看到<code>.head.text</code>的装载地址是0x0</li><li>链接器需要对最终生成的ELF进行优化，有可能会删除section没有被应用的符号，这里使用KEEP阻止链接器进行这个操作</li></ul><p>很明显这个名为<code>.head.text</code>的section就是objcopy后得到的<code>Image</code>镜像的开头部分。我们已经知道了<code>Image</code>是一个PE兼容的镜像，所以这里一定定义了PE header。这里稍微有一点经验的人即可猜到<code>.head.text</code>是定义在<code>head.S</code>文件中的，这也是其名字的由来。对于内核内的汇编代码文件，<code>linux/init.h</code>中定义了多个helper，用以简化section的定义：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cm>/* For assembly routines */</span>
+<span class=cp>#define __HEAD          .section        &#34;.head.text&#34;,&#34;ax&#34;
+</span><span class=cp>#define __INIT          .section        &#34;.init.text&#34;,&#34;ax&#34;
+</span><span class=cp>#define __FINIT         .previous
+</span><span class=cp></span>
+<span class=cp>#define __INITDATA      .section        &#34;.init.data&#34;,&#34;aw&#34;,%progbits
+</span><span class=cp>#define __INITRODATA    .section        &#34;.init.rodata&#34;,&#34;a&#34;,%progbits
+</span><span class=cp>#define __FINITDATA     .previous
+</span><span class=cp></span>
+<span class=cp>#define __MEMINIT        .section       &#34;.meminit.text&#34;, &#34;ax&#34;
+</span><span class=cp>#define __MEMINITDATA    .section       &#34;.meminit.data&#34;, &#34;aw&#34;
+</span><span class=cp>#define __MEMINITRODATA  .section       &#34;.meminit.rodata&#34;, &#34;a&#34;
+</span></code></pre></td></tr></table></div></div><p>接着我们在<code>arch/riscv/kernel/head.S</code>文件中看到这个section的定义：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm><span class=nf>__HEAD</span>
+<span class=nf>ENTRY</span><span class=p>(</span><span class=no>_start</span><span class=p>)</span>
+        <span class=err>/*</span>
+         <span class=err>*</span> <span class=nf>Image</span> <span class=no>header</span> <span class=no>expected</span> <span class=no>by</span> <span class=no>Linux</span> <span class=no>boot-loaders.</span> <span class=no>The</span> <span class=no>image</span> <span class=no>header</span> <span class=no>data</span>
+         <span class=err>*</span> <span class=nf>structure</span> <span class=no>is</span> <span class=no>described</span> <span class=no>in</span> <span class=no>asm</span><span class=err>/</span><span class=no>image.h.</span>
+         <span class=err>*</span> <span class=nf>Do</span> <span class=no>not</span> <span class=no>modify</span> <span class=no>it</span> <span class=no>without</span> <span class=no>modifying</span> <span class=no>the</span> <span class=no>structure</span> <span class=no>and</span> <span class=no>all</span> <span class=no>bootloaders</span>
+         <span class=err>*</span> <span class=nf>that</span> <span class=no>expects</span> <span class=no>this</span> <span class=no>header</span> <span class=no>format</span><span class=p>!!</span>
+         <span class=err>*/</span>
+        <span class=err>/*</span> <span class=nf>jump</span> <span class=no>to</span> <span class=no>start</span> <span class=no>kernel</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>j</span> <span class=no>_start_kernel</span>
+        <span class=err>/*</span> <span class=nf>reserved</span> <span class=p>*</span><span class=err>/</span>
+        <span class=na>.word</span> <span class=mi>0</span>
+        <span class=na>.balign</span> <span class=mi>8</span>
+<span class=c>#if __riscv_xlen == 64
+</span><span class=c></span>        <span class=err>/*</span> <span class=nf>Image</span> <span class=no>load</span> <span class=no>offset</span><span class=p>(</span><span class=mi>2</span><span class=no>MB</span><span class=p>)</span> <span class=no>from</span> <span class=no>start</span> <span class=no>of</span> <span class=no>RAM</span> <span class=p>*</span><span class=err>/</span>
+        <span class=na>.dword</span> <span class=mi>0x200000</span>
+<span class=c>#else
+</span><span class=c></span>        <span class=err>/*</span> <span class=nf>Image</span> <span class=no>load</span> <span class=no>offset</span><span class=p>(</span><span class=mi>4</span><span class=no>MB</span><span class=p>)</span> <span class=no>from</span> <span class=no>start</span> <span class=no>of</span> <span class=no>RAM</span> <span class=p>*</span><span class=err>/</span>
+        <span class=na>.dword</span> <span class=mi>0x400000</span>
+<span class=c>#endif
+</span><span class=c></span>        <span class=err>/*</span> <span class=nf>Effective</span> <span class=no>size</span> <span class=no>of</span> <span class=no>kernel</span> <span class=no>image</span> <span class=p>*</span><span class=err>/</span>
+        <span class=na>.dword</span> <span class=no>_end</span> <span class=p>-</span> <span class=no>_start</span>
+        <span class=na>.dword</span> <span class=no>__HEAD_FLAGS</span>
+        <span class=na>.word</span> <span class=no>RISCV_HEADER_VERSION</span>
+        <span class=na>.word</span> <span class=mi>0</span>
+        <span class=na>.dword</span> <span class=mi>0</span>
+        <span class=na>.ascii</span> <span class=no>RISCV_IMAGE_MAGIC</span>
+        <span class=na>.balign</span> <span class=mi>4</span>
+        <span class=na>.ascii</span> <span class=no>RISCV_IMAGE_MAGIC2</span>
+        <span class=na>.word</span> <span class=mi>0</span>
+</code></pre></td></tr></table></div></div><p>可以看到该section开头即为精心构建的PE header。至此，内核的构建方式已经比较明了，即利用链接脚本，精心设置整个vmlinux文件的布局，将<code>.head.text</code>放置到最前，并在其开头填充PE header，最后用objcopy导出这个带有PE header的二进制<code>Image</code>镜像。原理非常简单，但是其中涉及的技术比较非常规，对应用层开发人员来说并不常见。总的来说，其构建过程<strong>与ARM64基本一致</strong>。</p><h2 id=内核启动>内核启动</h2><p>前面的分析其实已经起了个头，按照前面提到的，我们可以找到RISC-V架构的启动协议<code>Documentation/riscv/boot-image-header.txt</code>。事实上这个文件只是简单介绍了一下<code>Image</code>文件header的结构，更详细的启动协议还是处于TODO状态，我们需要从代码进行分析。前面提到RISC-V内核比较类似于ARM64内核的格式，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-fallback data-lang=fallback>        u32 code0;                /* Executable code */
+        u32 code1;                /* Executable code */
+        u64 text_offset;          /* Image load offset, little endian */
+        u64 image_size;           /* Effective Image size, little endian */
+</code></pre></td></tr></table></div></div><p>从bootloader的角度，装载并执行<code>Image</code>类型的内核只需要做两件事情：</p><ul><li>将整个<code>Image</code>文件放置到内存起始处向后偏移<code>text_offset</code>的内存地址</li><li>跳转到<code>code0</code>的地址进行执行</li></ul><p>后续的事情，内核自理。我们看到<code>head.S</code>中有如下代码：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm><span class=nf>ENTRY</span><span class=p>(</span><span class=no>_start</span><span class=p>)</span>
+        <span class=err>/*</span>
+         <span class=err>*</span> <span class=nf>Image</span> <span class=no>header</span> <span class=no>expected</span> <span class=no>by</span> <span class=no>Linux</span> <span class=no>boot-loaders.</span> <span class=no>The</span> <span class=no>image</span> <span class=no>header</span> <span class=no>data</span>
+         <span class=err>*</span> <span class=nf>structure</span> <span class=no>is</span> <span class=no>described</span> <span class=no>in</span> <span class=no>asm</span><span class=err>/</span><span class=no>image.h.</span>
+         <span class=err>*</span> <span class=nf>Do</span> <span class=no>not</span> <span class=no>modify</span> <span class=no>it</span> <span class=no>without</span> <span class=no>modifying</span> <span class=no>the</span> <span class=no>structure</span> <span class=no>and</span> <span class=no>all</span> <span class=no>bootloaders</span>
+         <span class=err>*</span> <span class=nf>that</span> <span class=no>expects</span> <span class=no>this</span> <span class=no>header</span> <span class=no>format</span><span class=p>!!</span>
+         <span class=err>*/</span>
+        <span class=err>/*</span> <span class=nf>jump</span> <span class=no>to</span> <span class=no>start</span> <span class=no>kernel</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>j</span> <span class=no>_start_kernel</span>
+        <span class=err>/*</span> <span class=nf>reserved</span> <span class=p>*</span><span class=err>/</span>
+</code></pre></td></tr></table></div></div><p>很明显<code>code0</code>和<code>code1</code>放置的就是<code>j _start_kernel</code>生成的指令。那么我们就需要从<code>_start_kernel</code>开始看起。</p><h3 id=_start_kernel>_start_kernel</h3><p><code>_start_kernel</code>可以看到，一开始主要做了三件事：</p><ol><li>关闭所有的中断</li><li>设置gp寄存器指向对应的地址（该寄存器为ABI相关，用于存放<code>__global_pointer$</code>的地址，即GOT的位置，可以参考<a href=https://github.com/riscv/riscv-elf-psabi-doc/blob/master/riscv-elf.md>RISCV调用协定</a>）</li><li>关闭FPU，内核中是不用任何浮点指令的</li></ol><p>我们可以看到一个名为<code>CONFIG_RISCV_M_MODE</code>的内核配置，该选项启用时，内核默认自己从<code>Machine</code>特权级启动。该选项用于内核支持K210 SoC，我们默认该选项没有开启。这里注意，bootloader将控制权交给内核时，<code>a0</code>寄存器保存的值即为当前CPU执行单元的ID（RISC-V中称为HART ID）。</p><p><code>_start_kernel</code>接下来就开始执行一个简单的<code>Boot Protocol</code>，选出一个用于启动内核的CPU，其他CPU进入等待状态。RISC-V处理器在reset之后，所有的处理单元（HART）都会一起开始执行，而Linux内核启动时为主从模型，因此需要挑选出其中一个完成部分内核启动工作，之后告知其他的处理器继续执行开始处理任务。首先确定CPU ID是否合法，即有没有超出内核编译时选择的最大支持CPU数，如果超过则非法：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm><span class=c>#ifdef CONFIG_SMP
+</span><span class=c></span>        <span class=nf>li</span> <span class=no>t0</span><span class=p>,</span> <span class=no>CONFIG_NR_CPUS</span>
+        <span class=nf>blt</span> <span class=no>a0</span><span class=p>,</span> <span class=no>t0</span><span class=p>,</span> <span class=no>.Lgood_cores</span>
+        <span class=nf>tail</span> <span class=no>.Lsecondary_park</span>
+<span class=nl>.Lgood_cores:</span>
+<span class=c>#endif
+</span></code></pre></td></tr></table></div></div><p><code>.Lsecondary_park</code>分支实质上是循环调用<code>wfi</code>指令。接下来内核使用一个简单的策略选出用于启动的主CPU：先到先得。<code>setup.c</code>中定义了一个原子变量：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=n>atomic_t</span> <span class=n>hart_lottery</span> <span class=nf>__section</span><span class=p>(.</span><span class=n>sdata</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>经过codepath的所有CPU都会试图通过原子操作将这个变量加1。RISC-V的原子操作指令会将原子变量的原有值保存在原子变量的目标寄存器中，也就是说，如果操作后目标寄存器的值为0的CPU为第一对其进行操作的CPU。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>        <span class=err>/*</span> <span class=nf>Pick</span> <span class=no>one</span> <span class=no>hart</span> <span class=no>to</span> <span class=no>run</span> <span class=no>the</span> <span class=no>main</span> <span class=no>boot</span> <span class=no>sequence</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>la</span> <span class=no>a3</span><span class=p>,</span> <span class=no>hart_lottery</span>
+        <span class=nf>li</span> <span class=no>a2</span><span class=p>,</span> <span class=mi>1</span>
+        <span class=nf>amoadd.w</span> <span class=no>a3</span><span class=p>,</span> <span class=no>a2</span><span class=p>,</span> <span class=p>(</span><span class=no>a3</span><span class=p>)</span>
+        <span class=nf>bnez</span> <span class=no>a3</span><span class=p>,</span> <span class=no>.Lsecondary_start</span>
+</code></pre></td></tr></table></div></div><p>对于所有竞争失败的CPU，我们在后面进行分析，目前还是顺着主CPU进行分析。随后主CPU的操作基本如下：</p><ul><li>清空bss段，写为0</li><li>设置临时内核栈与<code>task_struct</code></li><li>依次调用<code>setup_vm</code>以及<code>relocate</code>设置内核的虚拟内存</li></ul><p>最后调用C语言通用代码启动内核：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>        <span class=err>/*</span> <span class=nf>Start</span> <span class=no>the</span> <span class=no>kernel</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>call</span> <span class=no>soc_early_init</span>
+        <span class=nf>call</span> <span class=no>parse_dtb</span>
+        <span class=nf>tail</span> <span class=no>start_kernel</span>
+</code></pre></td></tr></table></div></div><h3 id=setup_vm与relocate>setup_vm与relocate</h3><p><code>setup_vm</code>函数位于<code>arch/riscv/mm/init.c</code>中，其目的是设置一个最小的页表，让内核开启<code>MMU</code>并工作在虚拟内存之下，为后续的内存初始化做准备。注意<code>setup_vm</code>在被调用时很明显是没有设置好页表的，也就是说<code>setup_vm</code>函数生成汇编时的引用必须为<code>PC-relative</code>的，由于目前内核在RISC-V体系结构下全局使用<code>-cmodel=medany</code>进行编译，因此这一点是满足的。</p><p><code>setup_vm</code>函数执行的操作在各个体系结构中没有本质区别，都为设置一个最简单的页表，将内核所在的物理地址映射到PAGE_OFFSET所在虚拟地址区域（即将内核二进制所在的物理地址加上一个PAGE_OFFSET减去_start所的的偏移量）。因此，这里的任务实质上是建立一个临时页表，即内核临时的虚拟地址空间映射，：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define MAX_EARLY_MAPPING_SIZE	SZ_128M
+</span><span class=cp></span>
+<span class=n>pgd_t</span> <span class=n>early_pg_dir</span><span class=p>[</span><span class=n>PTRS_PER_PGD</span><span class=p>]</span> <span class=n>__initdata</span> <span class=n>__aligned</span><span class=p>(</span><span class=n>PAGE_SIZE</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>来挖细节，确定这个临时页表里初始化了哪些东西。首先明确一点，RISC-V支持多种页表结构，我们只分析64位的Sv39，目前内核在RISC-V 64位下就支持这一种模式。随后应该想到，setup_vm的运行环境里并没有初始化任何内存，因此必须静态定义一些变量，预留出一些内存供我们使用。先看<code>setup_vm</code>里用到的两个helper函数：<code>create_pgd_mapping</code> && <code>create_pmd_mapping</code>。</p><p>当前在RISC-V下的内核并不支持四级页表，那么自然没有PUD。<code>early_pmd</code>数组用于满足在MMU还没有开启时存放PMD表的需求：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#if MAX_EARLY_MAPPING_SIZE &lt; PGDIR_SIZE
+</span><span class=cp>#define NUM_EARLY_PMDS		1UL
+</span><span class=cp>#else
+</span><span class=cp>#define NUM_EARLY_PMDS		(1UL + MAX_EARLY_MAPPING_SIZE / PGDIR_SIZE)
+</span><span class=cp>#endif
+</span><span class=cp></span><span class=n>pmd_t</span> <span class=n>early_pmd</span><span class=p>[</span><span class=n>PTRS_PER_PMD</span> <span class=o>*</span> <span class=n>NUM_EARLY_PMDS</span><span class=p>]</span> <span class=n>__initdata</span> <span class=n>__aligned</span><span class=p>(</span><span class=n>PAGE_SIZE</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>在64位下，<code>NUM_EARLY_PMDS</code>始终为1。可以通过<code>alloc_pmd</code>函数申请一个PMD表：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=n>phys_addr_t</span> <span class=n>__init</span> <span class=nf>alloc_pmd</span><span class=p>(</span><span class=n>uintptr_t</span> <span class=n>va</span><span class=p>)</span>
+<span class=p>{</span>
+	<span class=n>uintptr_t</span> <span class=n>pmd_num</span><span class=p>;</span>
+
+	<span class=k>if</span> <span class=p>(</span><span class=n>mmu_enabled</span><span class=p>)</span>
+		<span class=k>return</span> <span class=n>memblock_phys_alloc</span><span class=p>(</span><span class=n>PAGE_SIZE</span><span class=p>,</span> <span class=n>PAGE_SIZE</span><span class=p>);</span>
+
+	<span class=n>pmd_num</span> <span class=o>=</span> <span class=p>(</span><span class=n>va</span> <span class=o>-</span> <span class=n>PAGE_OFFSET</span><span class=p>)</span> <span class=o>&gt;&gt;</span> <span class=n>PGDIR_SHIFT</span><span class=p>;</span>
+	<span class=n>BUG_ON</span><span class=p>(</span><span class=n>pmd_num</span> <span class=o>&gt;=</span> <span class=n>NUM_EARLY_PMDS</span><span class=p>);</span>
+	<span class=k>return</span> <span class=p>(</span><span class=n>uintptr_t</span><span class=p>)</span><span class=o>&amp;</span><span class=n>early_pmd</span><span class=p>[</span><span class=n>pmd_num</span> <span class=o>*</span> <span class=n>PTRS_PER_PMD</span><span class=p>];</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>这里能很明显看到，在MMU使能之前使用<code>early_pmd</code>的空间，而使能之后则使用memblock中分配的内存。<code>create_pgd_mapping</code>函数原型如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=kt>void</span> <span class=n>__init</span> <span class=nf>create_pgd_mapping</span><span class=p>(</span><span class=n>pgd_t</span> <span class=o>*</span><span class=n>pgdp</span><span class=p>,</span>
+				      <span class=n>uintptr_t</span> <span class=n>va</span><span class=p>,</span> <span class=n>phys_addr_t</span> <span class=n>pa</span><span class=p>,</span>
+				      <span class=n>phys_addr_t</span> <span class=n>sz</span><span class=p>,</span> <span class=n>pgprot_t</span> <span class=n>prot</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>这里仔细看实现，不要误解了<code>va</code>和<code>pa</code>的意思。va是你想进行映射的<strong>虚拟地址</strong>，<code>pa</code>是你要往PGD中给这个虚拟地址对应的表项存放的<strong>下一级页表</strong>的<strong>物理地址</strong>。<code>sz</code>是你要映射的内存区域的大小，必须小于<code>PGDIR_SIZE</code>，可以为下面一级表项可以映射内存区域的长度。如果<code>create_pgd_mapping</code>函数发现<code>sz</code>小于<code>PGDIR_SIZE</code>，则会递归的创建更下一级的页表。</p><p><code>early_pg_dir</code>页表内包含两类映射：内核和FIXMAP。其中内核映射是将内核自身处于的连续物理内存区域映射到位于<code>PAGE_OFFSET</code>的虚拟内存地址上。而FIXMAP映射并没有映射全部的FIXMAP，而是仅仅影射了FIX_FDT部分，让后续的代码可以访问设备树。</p><p><code>setup_vm</code>并不是仅仅只创建了一个<code>early_pg_dir</code>页表，还创建了<code>trampoline_pg_dir</code>页表。这个页表将<code>PAGE_OFFSET</code>后长为<code>PMD_SIZE</code>的区域映射到<code>load_pa</code>，即内核起始被装载后的起始物理内存地址。<code>trampoline_pg_dir</code>页表的作用我们随后就会看到。</p><p>分析完<code>setup_vm</code>函数后，又回到汇编代码中，这次来看relocate函数。函数只有一个参数<code>a0</code>寄存器，用于传递一个页表的物理地址。这个<code>relocate</code>函数原理听着很简单，但是真到自己写的时侯则是满满的细节。首先我们知道我们要在该函数中开启MMU，这就说明调用函数时保存的<code>ra</code>寄存器，即函数返回地址中的地址已经失效，需要将其修改为对应的虚拟地址。这个原理比较简单，首先通过PC相对寻址得到<code>_start</code>的物理地址，然后将其与<code>PAGE_OFFSET</code>相减，即得到物理地址与虚拟地址的偏移量。</p><p>接下来就到前面设置的<code>trampoline_pg_dir</code>上场的时间了，我们需要借助<code>trampoline</code>页表通过中断向量的方式从物理地址跳转到虚拟地址，原理如下：</p><ul><li>首先将中断向量设置到<code>relocate</code>函数的后半段需要跳转的地方</li><li>然后将<code>trampoline_pg_dir</code>的地址设置到STVEC寄存器，设置完成MMU被启用，这使得访问原有物理地址时触发异常并跳转到中断向量</li></ul><p>事实上，这个<code>trampoline</code>是多余的，我不知道上游为什么不删除它，也许是因为CPU热插拔支持的缘故。<code>relocate</code>最终会装载<code>early_pg_dir</code>页表，此时内核已经位于正确的虚拟地址空间上。</p><h3 id=临时内核栈与task_struct>临时内核栈与task_struct</h3><p>回到<code>_start_kernel</code>，当<code>relocate</code>执行完毕之后，内核需要初始化一个内核线程的运行环境。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>        <span class=err>/*</span> <span class=nf>Initialize</span> <span class=no>page</span> <span class=no>tables</span> <span class=no>and</span> <span class=no>relocate</span> <span class=no>to</span> <span class=no>virtual</span> <span class=no>addresses</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>la</span> <span class=no>sp</span><span class=p>,</span> <span class=no>init_thread_union</span> <span class=err>+</span> <span class=no>THREAD_SIZE</span>
+</code></pre></td></tr></table></div></div><p>这里init_thread_union是通过链接脚本留出的一个PAGE（riscv平台上为4KB）大小的区域，用以充当临时内核栈。随后程序按照riscv的C程序调用协定保存两个Caller需要保存的寄存器，即：</p><ul><li>a0：当前hart（Hardware Thread，即RISCV术语中的最小执行单元，即一个逻辑CPU）的id</li><li>a1：指向设备树的指针</li></ul><p>这两个参数都是bootloader传进来的。到达这一步之后，内核调用setup_vm()函数，设置一个基本的页表，进而为后续打开分页机制做准备。</p><p>进入内核C语言环境的最后一个步骤是设置<code>tp</code>寄存器。我们知道内核初始化时，自身运行的上下文为init_task，即内核的第一个任务（<code>init/init_task.c</code>）。该task_struct是静态初始化的，因此我们唯一需要做得就是修改当前CPU的运行上下文，使其认为他当前是在运行init_task任务。内核的进程上下文切换是一个及其架构相关的操作，我们来看看riscv平台是如果进行这个操作的。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>        <span class=nf>la</span> <span class=no>tp</span><span class=p>,</span> <span class=no>init_task</span>
+        <span class=nf>sw</span> <span class=no>s0</span><span class=p>,</span> <span class=no>TASK_TI_CPU</span><span class=p>(</span><span class=no>tp</span><span class=p>)</span> <span class=c># 将当前CPU ID表存在task_struct中
+</span></code></pre></td></tr></table></div></div><p>如果读过riscv的C语言调用约定一定会知道tp寄存器的存在，事实上文档中并没有写的较为详细。但是现在我们在这里看到在Supervisor模式下的用途：保存当前CPU运行的进程上下文，即<code>task_struct</code>结构体。查看<code>asm/current.h</code>也可以发现这一事实：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=n>create_pte_mappingstatic</span> <span class=n>__always_inline</span> <span class=k>struct</span> <span class=n>task_struct</span> <span class=o>*</span><span class=nf>get_current</span><span class=p>(</span><span class=kt>void</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=k>register</span> <span class=k>struct</span> <span class=n>task_struct</span> <span class=o>*</span><span class=n>tp</span> <span class=n>__asm__</span><span class=p>(</span><span class=s>&#34;tp&#34;</span><span class=p>);</span>
+        <span class=k>return</span> <span class=n>tp</span><span class=p>;</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2020-07-25</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/kernel/>kernel</a>
+<a href=/crab2313.github.io/tags/risc-v/>risc-v</a></div><nav class=post-nav><a class=prev href=crab2313.github.io/post/riscv-setup-arch-exception/><i class="iconfont icon-left"></i>
+<span class="prev-text nav-default">Linux内核在RISC-V架构下的setup_arch与异常处理</span>
+<span class="prev-text nav-mobile">上一篇</span></a>
+<a class=next href=crab2313.github.io/post/ttm/><span class="next-text nav-default">TTM内存分配器分析</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>

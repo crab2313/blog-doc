@@ -1,0 +1,277 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>TTM内存分配器分析 - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="TTM 本文结合QXL内的实现分析内核DRM框架中提供的TTM内存管理器。 BO BO是Buffer Object的缩写，与Buffer是有区别的。个人理"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/ttm/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="TTM内存分配器分析"><meta property="og:description" content="TTM 本文结合QXL内的实现分析内核DRM框架中提供的TTM内存管理器。 BO BO是Buffer Object的缩写，与Buffer是有区别的。个人理"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/ttm/"><meta property="article:section" content="post"><meta property="article:published_time" content="2020-04-26T00:00:00+00:00"><meta property="article:modified_time" content="2020-04-26T00:00:00+00:00"><meta itemprop=name content="TTM内存分配器分析"><meta itemprop=description content="TTM 本文结合QXL内的实现分析内核DRM框架中提供的TTM内存管理器。 BO BO是Buffer Object的缩写，与Buffer是有区别的。个人理"><meta itemprop=datePublished content="2020-04-26T00:00:00+00:00"><meta itemprop=dateModified content="2020-04-26T00:00:00+00:00"><meta itemprop=wordCount content="3876"><meta itemprop=keywords content="kernel,drm,"><meta name=twitter:card content="summary"><meta name=twitter:title content="TTM内存分配器分析"><meta name=twitter:description content="TTM 本文结合QXL内的实现分析内核DRM框架中提供的TTM内存管理器。 BO BO是Buffer Object的缩写，与Buffer是有区别的。个人理"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>TTM内存分配器分析</h1><div class=post-meta><span class=post-time>2020-04-26</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><a href=#ttm>TTM</a><ul><li><a href=#bo>BO</a></li><li><a href=#ttm的局限性>TTM的局限性</a></li><li><a href=#初始化>初始化</a></li><li><a href=#ttm_mem_type_manager>ttm_mem_type_manager</a></li><li><a href=#ttm_buffer_object>ttm_buffer_object</a></li><li><a href=#ttm_mem_reg>ttm_mem_reg</a></li><li><a href=#地址空间映射>地址空间映射</a></li><li><a href=#ttm_mem_glob>ttm_mem_glob</a></li><li><a href=#ttm_tt>ttm_tt</a></li></ul></li></ul></nav></div></div><div class=post-content><h1 id=ttm>TTM</h1><p>本文结合QXL内的实现分析内核DRM框架中提供的TTM内存管理器。</p><h2 id=bo>BO</h2><p>BO是Buffer Object的缩写，与Buffer是有区别的。个人理解BO和Buffer最大的区别就是BO比Buffer多了好几个操作，且BO的后端Buffer位置是会变化的。这是因为在GPU工作时，同一个BO可能被管理器移动到三个位置上：</p><ul><li>GPU的专有内存中，也称显存、VRAM</li><li>系统内存中</li><li>系统内存在磁盘中的缓存中</li></ul><p>因此，BO提供了这些操作的抽象。注意BO有可能被多个对象访问，如GPU和CPU，且GPU和CPU只能访问特定位置上的BO。如，GPU只能访问VRAM和（部分）系统内存中的BO。这其中的拷贝和管理就需要TTM进行。</p><h2 id=ttm的局限性>TTM的局限性</h2><p>TTM有一大堆问题，但作为目前最成熟的codebase，基本上所有开发者都是边骂边用。目前的基本操作是使用GEM当作用户态前端，但是后端使用TTM进行。目前TTM的codebase经过多年clean up，目前还剩1w行左右。</p><h2 id=初始化>初始化</h2><p>TTM的初始化由<code>ttm_bo_device_init</code>函数进行，该函数会会让驱动得到一个<code>ttm_bo_device</code>。</p><p><code>ttm_bo_init_mm</code>负责初始化一个memory_manager。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>ttm_bo_device</span> <span class=p>{</span>
+	<span class=k>struct</span> <span class=n>list_head</span> <span class=n>device_list</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_bo_driver</span> <span class=o>*</span><span class=n>driver</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_mem_type_manager</span> <span class=n>man</span><span class=p>[</span><span class=n>TTM_NUM_MEM_TYPES</span><span class=p>];</span>
+	<span class=k>struct</span> <span class=n>drm_vma_offset_manager</span> <span class=o>*</span><span class=n>vma_manager</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>list_head</span> <span class=n>ddestroy</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>address_space</span> <span class=o>*</span><span class=n>dev_mapping</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>delayed_work</span> <span class=n>wq</span><span class=p>;</span>
+
+	<span class=kt>bool</span> <span class=n>need_dma32</span><span class=p>;</span>
+	<span class=kt>bool</span> <span class=n>no_retry</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>所有的<code>ttm_bo_device</code>都会放到一个<code>ttm_bo_global</code>上的<code>device_list</code>中。</p><h2 id=ttm_mem_type_manager>ttm_mem_type_manager</h2><p>前面看到<code>ttm_bo_device</code>中保存了一个<code>ttm_mem_type_manager</code>数组，即用于管理多种内存类型的管理器。注意到其内部保存了一组<code>func</code>函数指针，该指针通常由使用TTM的驱动进行设置，一般为<code>ttm_bo_manager_func</code>。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>const</span> <span class=k>struct</span> <span class=n>ttm_mem_type_manager_func</span> <span class=n>ttm_bo_manager_func</span> <span class=o>=</span> <span class=p>{</span>
+	<span class=p>.</span><span class=n>init</span> <span class=o>=</span> <span class=n>ttm_bo_man_init</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>takedown</span> <span class=o>=</span> <span class=n>ttm_bo_man_takedown</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>get_node</span> <span class=o>=</span> <span class=n>ttm_bo_man_get_node</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>put_node</span> <span class=o>=</span> <span class=n>ttm_bo_man_put_node</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>debug</span> <span class=o>=</span> <span class=n>ttm_bo_man_debug</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>事实上DRM子系统提供了自己的内存分配器，称为<code>drm_mm</code>，具体信息详见<a href=https://www.kernel.org/doc/html/latest/gpu/drm-mm.html#drm-mm-range-allocator>内核文档</a>。<code>ttm_mem_type_manager_func</code>中的回调函数使用<code>drm_mm</code>管理各类型的存储空间。有关于初始化的<code>init</code>和与之相反的<code>takedown</code>可以不谈，主要需要分析<code>get_node</code>函数，该函数为内存分配的入口函数。函数事实上的实现也很简单，仅仅是调用<code>drm_mm</code>的接口获取<code>drm_mm_node</code>并将其写入传入的<code>ttm_mem_reg</code>中：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>		<span class=n>mem</span><span class=o>-&gt;</span><span class=n>mm_node</span> <span class=o>=</span> <span class=n>node</span><span class=p>;</span>
+		<span class=n>mem</span><span class=o>-&gt;</span><span class=n>start</span> <span class=o>=</span> <span class=n>node</span><span class=o>-&gt;</span><span class=n>start</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>注意这个<code>start</code>字段，后面会看到可以以它计算出BO对应的物理地址。</p><p>除了<code>TTM_PL_SYSTEM</code>类型外的<code>ttm_mem_type_manager</code>一般由驱动程序自行初始化。初始化<code>ttm_mem_type_manager</code>的入口函数为<code>ttm_bo_init_mm</code>，该函数会调用驱动程序注册给<code>ttm_bo_device</code>的<code>ttm_bo_driver</code>上的<code>init_mem_type</code>函数指针初始化对应类型的内存管理器。</p><h2 id=ttm_buffer_object>ttm_buffer_object</h2><p>这个对象应该是TTM管理的BO的基类，对BO的管理应该都是围绕它进行的。从这里看到TTM和GEM其是并不是独立的两个组件，<code>ttm_buffer_object</code>是以<code>drm_gem_object</code>为基类的。</p><p>先来看明白一个结构体：<code>ttm_placement</code>，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>ttm_placement</span> <span class=p>{</span>
+	<span class=kt>unsigned</span>		<span class=n>num_placement</span><span class=p>;</span>
+	<span class=k>const</span> <span class=k>struct</span> <span class=n>ttm_place</span>	<span class=o>*</span><span class=n>placement</span><span class=p>;</span>
+	<span class=kt>unsigned</span>		<span class=n>num_busy_placement</span><span class=p>;</span>
+	<span class=k>const</span> <span class=k>struct</span> <span class=n>ttm_place</span>	<span class=o>*</span><span class=n>busy_placement</span><span class=p>;</span>
+<span class=p>};</span>
+
+<span class=k>struct</span> <span class=n>ttm_place</span> <span class=p>{</span>
+	<span class=kt>unsigned</span>	<span class=n>fpfn</span><span class=p>;</span>
+	<span class=kt>unsigned</span>	<span class=n>lpfn</span><span class=p>;</span>
+	<span class=n>uint32_t</span>	<span class=n>flags</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>每个<code>ttm_buffer_object</code>都有与之关联的<code>ttmp_placement</code>，而<code>ttm_placement</code>的意义也很简单，即BO可以放置的位置和当空间紧张时，BO可以放置的位置。<code>ttm_place</code>实际上描述了一段内存区域（由起始和结束PFN描述）和一个flags。这两个结构体结合即可描述清楚BO对于存储空间的偏好。</p><p>除此之外BO还有类型属性，即：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>enum</span> <span class=n>ttm_bo_type</span> <span class=p>{</span>
+	<span class=n>ttm_bo_type_device</span><span class=p>,</span>
+	<span class=n>ttm_bo_type_kernel</span><span class=p>,</span>
+	<span class=n>ttm_bo_type_sg</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>这里只需要明白device和kernel的最大区别是kernel类型的BO无法被用户态进行访问。</p><p><code>ttm_bo_init</code>函数负责初始化一个<code>ttm_buffer_object</code>，而其内部由<code>ttm_bo_init_reserved</code>实现。</p><h2 id=ttm_mem_reg>ttm_mem_reg</h2><p><code>ttm_bo_init_reserved</code>使用<code>ttm_bo_validate</code>函数验证<code>ttm_buffer_object</code>是否在正确的位置上，如果不是，则调用move操作将其放置在正确的位置上。一个BO当前处于的存储位置由<code>ttm_mem_reg</code>描述：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>ttm_mem_reg</span> <span class=p>{</span>
+	<span class=kt>void</span> <span class=o>*</span><span class=n>mm_node</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>start</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>size</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>num_pages</span><span class=p>;</span>
+	<span class=n>uint32_t</span> <span class=n>page_alignment</span><span class=p>;</span>
+	<span class=n>uint32_t</span> <span class=n>mem_type</span><span class=p>;</span>
+	<span class=n>uint32_t</span> <span class=n>placement</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_bus_placement</span> <span class=n>bus</span><span class=p>;</span>
+<span class=p>};</span>
+
+<span class=k>struct</span> <span class=n>ttm_bus_placement</span> <span class=p>{</span>
+	<span class=kt>void</span>		<span class=o>*</span><span class=n>addr</span><span class=p>;</span>
+	<span class=n>phys_addr_t</span>	<span class=n>base</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span>	<span class=n>size</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span>	<span class=n>offset</span><span class=p>;</span>
+	<span class=kt>bool</span>		<span class=n>is_iomem</span><span class=p>;</span>
+	<span class=kt>bool</span>		<span class=n>io_reserved_vm</span><span class=p>;</span>
+	<span class=n>uint64_t</span>        <span class=n>io_reserved_count</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><h2 id=地址空间映射>地址空间映射</h2><p>该操作主要指将一个BO映射到CPU的虚拟地址，该操作是BO最主要的操作之一。只有映射到虚拟地址空间，一个BO后端的Buffer才能被CPU访问，才能被应用程序操作（读写）。TTM提供了好几组工具函数，用于实现各种各样的映射，首先来看<code>ttm_bo_kmap/kunmap</code>。</p><p>提到映射，那么我们首先要明白TTM允许使用它的驱动程序注册一组callback，这组callback在映射/取消映射时被调用，可以让驱动程序hook自己的操作。这组callback为<code>ttm_bo_driver</code>上的<code>io_mem_reserve</code>和<code>io_mem_free</code>。</p><p><code>ttm_bo_kmap</code>函数的主要工作为将BO映射到内核虚拟地址空间中，注意它的最后一个参数<code>map</code>，为一个<code>ttm_bo_kmap_obj</code>结构体。该结构体用于表示一个kmap映射，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define TTM_BO_MAP_IOMEM_MASK 0x80
+</span><span class=cp></span><span class=k>struct</span> <span class=n>ttm_bo_kmap_obj</span> <span class=p>{</span>
+	<span class=kt>void</span> <span class=o>*</span><span class=n>virtual</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>page</span> <span class=o>*</span><span class=n>page</span><span class=p>;</span>
+	<span class=k>enum</span> <span class=p>{</span>
+		<span class=n>ttm_bo_map_iomap</span>        <span class=o>=</span> <span class=mi>1</span> <span class=o>|</span> <span class=n>TTM_BO_MAP_IOMEM_MASK</span><span class=p>,</span>
+		<span class=n>ttm_bo_map_vmap</span>         <span class=o>=</span> <span class=mi>2</span><span class=p>,</span>
+		<span class=n>ttm_bo_map_kmap</span>         <span class=o>=</span> <span class=mi>3</span><span class=p>,</span>
+		<span class=n>ttm_bo_map_premapped</span>    <span class=o>=</span> <span class=mi>4</span> <span class=o>|</span> <span class=n>TTM_BO_MAP_IOMEM_MASK</span><span class=p>,</span>
+	<span class=p>}</span> <span class=n>bo_kmap_type</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_buffer_object</span> <span class=o>*</span><span class=n>bo</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>很明显<code>virtual</code>为映射好之后的起始虚拟地址，而从后面可以看到<code>page</code>为kmap下映射用的<code>struct page</code>指针（注意kmap模式只有在映射一个page，且允许缓存时使用）。简单分析了这个参数后，来看正主。除去参数合法性检查等操作后，可以看到函数调用了<code>ttm_mem_io_reserve</code>，这本质就是调用了上面提到的<code>io_mem_reserve</code>回调函数。随后，函数根据BO是否为IO内存调用<code>ttm_bo_kmap_ttm</code>或者<code>ttm_bo_ioremap</code>。</p><p><code>ttm_bo_kmap_ttm</code>函数像前面提到的一样，在只映射一页且允许缓存的情况下使用kmap，在其他情况下使用vmap进行映射，这在<code>ttm_tt</code>的分析里详细看。而<code>ttm_bo_ioremap</code>的实现更加直观，分为两种情况：已经映射和没有映射。对于已经映射的BO，其<code>bo->mem.bus.addr</code>不为0，则将<code>ttm_bo_kmap_obj</code>的类型设置为<code>ttm_bo_map_premapped</code>，并以该虚拟地址作为映射的虚拟地址。对于没有进行映射的BO，则根据<code>ttm_buffer_object</code>中的<code>ttm_mem_reg</code>中的<code>placement</code>标志中是否存在<code>TTM_PL_FLAG_WC</code>对物理地址调用ioremap_wc或者ioremap函数进行映射。最后一提，映射使用的物理地址通过<code>ttm_mem_reg.bus</code>上的<code>base+offset</code>计算而来。</p><h2 id=ttm_mem_glob>ttm_mem_glob</h2><p><code>ttm_mem_glob</code>是一个<code>ttm_mem_global</code>结构体，是一个单例对象，没错是全局的。这意味着无论内核中无论同时跑了多少个使用TTM的显卡驱动实例，它们都使用的是同一个<code>ttm_mem_glob</code>对象。首先明确<code>TTM</code>并没有直接调用内存子系统进行page的分配回收操作，而是增加了自己的抽象。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define TTM_MEM_MAX_ZONES 2
+</span><span class=cp></span><span class=k>struct</span> <span class=n>ttm_mem_zone</span><span class=p>;</span>
+<span class=k>extern</span> <span class=k>struct</span> <span class=n>ttm_mem_global</span> <span class=p>{</span>
+	<span class=k>struct</span> <span class=n>kobject</span> <span class=n>kobj</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>workqueue_struct</span> <span class=o>*</span><span class=n>swap_queue</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>work_struct</span> <span class=n>work</span><span class=p>;</span>
+	<span class=n>spinlock_t</span> <span class=n>lock</span><span class=p>;</span>
+	<span class=n>uint64_t</span> <span class=n>lower_mem_limit</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_mem_zone</span> <span class=o>*</span><span class=n>zones</span><span class=p>[</span><span class=n>TTM_MEM_MAX_ZONES</span><span class=p>];</span>
+	<span class=kt>unsigned</span> <span class=kt>int</span> <span class=n>num_zones</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_mem_zone</span> <span class=o>*</span><span class=n>zone_kernel</span><span class=p>;</span>
+<span class=cp>#ifdef CONFIG_HIGHMEM
+</span><span class=cp></span>	<span class=k>struct</span> <span class=n>ttm_mem_zone</span> <span class=o>*</span><span class=n>zone_highmem</span><span class=p>;</span>
+<span class=cp>#else
+</span><span class=cp></span>	<span class=k>struct</span> <span class=n>ttm_mem_zone</span> <span class=o>*</span><span class=n>zone_dma32</span><span class=p>;</span>
+<span class=cp>#endif
+</span><span class=cp></span><span class=p>}</span> <span class=n>ttm_mem_glob</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>该全局对象由<code>ttm_mem_global_init</code>初始化，我们只看它初始化的page pool，也就是page缓存池。这个page缓冲区池由<code>ttm_pool_manager</code>描述，也是单例对象，由<code>ttm_page_alloc_init</code>函数初始化。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>ttm_pool_manager</span> <span class=p>{</span>
+	<span class=k>struct</span> <span class=n>kobject</span>		<span class=n>kobj</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>shrinker</span>		<span class=n>mm_shrink</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_pool_opts</span>	<span class=n>options</span><span class=p>;</span>
+
+	<span class=k>union</span> <span class=p>{</span>
+		<span class=k>struct</span> <span class=n>ttm_page_pool</span>	<span class=n>pools</span><span class=p>[</span><span class=n>NUM_POOLS</span><span class=p>];</span>
+		<span class=k>struct</span> <span class=p>{</span>
+			<span class=k>struct</span> <span class=n>ttm_page_pool</span>	<span class=n>wc_pool</span><span class=p>;</span>
+			<span class=k>struct</span> <span class=n>ttm_page_pool</span>	<span class=n>uc_pool</span><span class=p>;</span>
+			<span class=k>struct</span> <span class=n>ttm_page_pool</span>	<span class=n>wc_pool_dma32</span><span class=p>;</span>
+			<span class=k>struct</span> <span class=n>ttm_page_pool</span>	<span class=n>uc_pool_dma32</span><span class=p>;</span>
+			<span class=k>struct</span> <span class=n>ttm_page_pool</span>	<span class=n>wc_pool_huge</span><span class=p>;</span>
+			<span class=k>struct</span> <span class=n>ttm_page_pool</span>	<span class=n>uc_pool_huge</span><span class=p>;</span>
+		<span class=p>}</span> <span class=p>;</span>
+	<span class=p>};</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>这里注意一个逻辑，有cache的page是不需要缓存起来的，可以直接通过内存子系统提供的接口进行申请和回收。其于的情况下都会为其维护一个page池，由<code>struct ttm_page_pool</code>描述。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>ttm_page_pool</span> <span class=p>{</span>
+	<span class=n>spinlock_t</span>		<span class=n>lock</span><span class=p>;</span>
+	<span class=kt>bool</span>			<span class=n>fill_lock</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>list_head</span>	<span class=n>list</span><span class=p>;</span>
+	<span class=n>gfp_t</span>			<span class=n>gfp_flags</span><span class=p>;</span>
+	<span class=kt>unsigned</span>		<span class=n>npages</span><span class=p>;</span>
+	<span class=kt>char</span>			<span class=o>*</span><span class=n>name</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span>		<span class=n>nfrees</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span>		<span class=n>nrefills</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>int</span>		<span class=n>order</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><h2 id=ttm_tt>ttm_tt</h2><p>TTM的全称是<code>Translation Table Manager</code>，那么<code>ttm_tt</code>中的<code>tt</code>就应该是<code>Translation Table</code>的缩写。这个结构体在BO的操作中时有出现，很显然它用管理内存页表，应用于存在于非VRAM空间中的BO。从名字上来看<code>ttm_tt</code>是TTM的核心对象之一。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>ttm_tt</span> <span class=p>{</span>
+	<span class=k>struct</span> <span class=n>ttm_bo_device</span> <span class=o>*</span><span class=n>bdev</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>ttm_backend_func</span> <span class=o>*</span><span class=n>func</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>page</span> <span class=o>**</span><span class=n>pages</span><span class=p>;</span>
+	<span class=n>uint32_t</span> <span class=n>page_flags</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>num_pages</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>sg_table</span> <span class=o>*</span><span class=n>sg</span><span class=p>;</span> <span class=cm>/* for SG objects via dma-buf */</span>
+	<span class=k>struct</span> <span class=n>file</span> <span class=o>*</span><span class=n>swap_storage</span><span class=p>;</span>
+	<span class=k>enum</span> <span class=n>ttm_caching_state</span> <span class=n>caching_state</span><span class=p>;</span>
+	<span class=k>enum</span> <span class=p>{</span>
+		<span class=n>tt_bound</span><span class=p>,</span>
+		<span class=n>tt_unbound</span><span class=p>,</span>
+		<span class=n>tt_unpopulated</span><span class=p>,</span>
+	<span class=p>}</span> <span class=n>state</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p><code>ttm_tt</code>实质上管理BO的存储后端，所以它是嵌入到<code>ttm_buffer_object</code>中的。事实上<code>ttm_buffer_object->ttm</code>的创建是通过驱动程序注册的<code>ttm_bo_driver->ttm_tt_create</code>回调函数实现的，下面是<code>ttm_ttm_create</code>函数的片段：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>bo</span><span class=o>-&gt;</span><span class=n>ttm</span> <span class=o>=</span> <span class=n>bdev</span><span class=o>-&gt;</span><span class=n>driver</span><span class=o>-&gt;</span><span class=n>ttm_tt_create</span><span class=p>(</span><span class=n>bo</span><span class=p>,</span> <span class=n>page_flags</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>这个回调函数内部一般会调用<code>ttm_tt_init</code>初始化<code>ttm_tt</code>，本质上是初始化<code>ttm_tt</code>各字段并申请一个用于存放<code>struct page</code>的数组。</p><p><code>ttm_tt</code>的<code>state</code>中保存了当前的状态，即：</p><ul><li>unpopulated，内存没有分配</li><li>unbound，内存已经分配，但是没有bind</li><li>bind，内存已经分配，且已经bind</li></ul></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2020-04-26</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/kernel/>kernel</a>
+<a href=/crab2313.github.io/tags/drm/>drm</a></div><nav class=post-nav><a class=prev href=crab2313.github.io/post/riscv-build-and-boot/><i class="iconfont icon-left"></i>
+<span class="prev-text nav-default">Linux内核在RISC-V架构下的构建与启动</span>
+<span class="prev-text nav-mobile">上一篇</span></a>
+<a class=next href=crab2313.github.io/post/smmu/><span class="next-text nav-default">SMMU内核驱动分析</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>

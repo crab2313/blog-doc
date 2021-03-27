@@ -1,0 +1,590 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>DRM显示框架分析 - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="真的没有想到真的有人能看到这篇东西，所以我准备抽出时间把这个东西整理完。本文是我阅读内核DRM子系统的一些随笔，其目的是记录我对内核代码的阅"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/drm/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="DRM显示框架分析"><meta property="og:description" content="真的没有想到真的有人能看到这篇东西，所以我准备抽出时间把这个东西整理完。本文是我阅读内核DRM子系统的一些随笔，其目的是记录我对内核代码的阅"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/drm/"><meta property="article:section" content="post"><meta property="article:published_time" content="2021-03-26T00:00:00+00:00"><meta property="article:modified_time" content="2021-03-26T00:00:00+00:00"><meta itemprop=name content="DRM显示框架分析"><meta itemprop=description content="真的没有想到真的有人能看到这篇东西，所以我准备抽出时间把这个东西整理完。本文是我阅读内核DRM子系统的一些随笔，其目的是记录我对内核代码的阅"><meta itemprop=datePublished content="2021-03-26T00:00:00+00:00"><meta itemprop=dateModified content="2021-03-26T00:00:00+00:00"><meta itemprop=wordCount content="14749"><meta itemprop=keywords content="kernel,drm,"><meta name=twitter:card content="summary"><meta name=twitter:title content="DRM显示框架分析"><meta name=twitter:description content="真的没有想到真的有人能看到这篇东西，所以我准备抽出时间把这个东西整理完。本文是我阅读内核DRM子系统的一些随笔，其目的是记录我对内核代码的阅"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>DRM显示框架分析</h1><div class=post-meta><span class=post-time>2021-03-26</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><a href=#阅读路径>阅读路径</a></li><li><a href=#gem>GEM</a><ul><li><a href=#gem与ttm之间的关系>GEM与TTM之间的关系</a></li><li><a href=#框架初始化>框架初始化</a></li><li><a href=#handle与name>handle与name</a></li><li><a href=#drm_gem_object>drm_gem_object</a></li><li><a href=#用户态映射>用户态映射</a></li></ul></li><li><a href=#dumb>DUMB</a></li><li><a href=#gbm>GBM</a><ul><li><a href=#note>Note</a></li><li><a href=#gbm_device>gbm_device</a></li><li><a href=#gbm_bo>gbm_bo</a></li></ul></li><li><a href=#kms>KMS</a><ul><li><a href=#对象管理>对象管理</a></li><li><a href=#atomic-mode-setting>Atomic Mode Setting</a></li><li><a href=#驱动接口>驱动接口</a></li><li><a href=#helper架构>helper架构</a></li><li><a href=#crtc>CRTC</a></li><li><a href=#framebuffer>Framebuffer</a></li><li><a href=#plane>Plane</a></li><li><a href=#encoder>Encoder</a></li><li><a href=#mode>Mode</a></li><li><a href=#connector>Connector</a><ul><li><a href=#drm_helper_probe_single_connector_modes>drm_helper_probe_single_connector_modes</a></li><li><a href=#hotplug检测>hotplug检测</a></li></ul></li><li><a href=#用户态调用路径>用户态调用路径</a></li><li><a href=#state对象>State对象</a><ul><li><a href=#state的创建>State的创建</a></li><li><a href=#state更新>state更新</a></li><li><a href=#state的commit>state的commit</a></li><li><a href=#drm_atomic_helper_commit_modeset_disables>drm_atomic_helper_commit_modeset_disables</a></li></ul></li><li><a href=#atomic-modeset-helper函数分析>Atomic Modeset Helper函数分析</a><ul><li><a href=#架构>架构</a></li><li><a href=#drm_atomic_helper_check>drm_atomic_helper_check</a></li></ul></li></ul></li></ul></nav></div></div><div class=post-content><p>真的没有想到真的有人能看到这篇东西，所以我准备抽出时间把这个东西整理完。本文是我阅读内核DRM子系统的一些随笔，其目的是记录我对内核代码的阅读过程和自己的一些理解，希望景嘉微的大佬们多多指正。</p><p>接触linux桌面比较多的人一定会对DRM这个名字比较熟悉。网上也有大把资料在解释DRM到底是什么。DRM主要分为KMS与Render两大部分，本文实质上是在分析DRM中KMS相关的框架实现。而Render相关的API是特定于驱动的，内核并不为用户态提供一个通用的IOCTL接口。如果后续时间充足，我将会分析一下VC4的Render API，以及相应的用户态实现。从功能上讲，KMS负责搭建显示控制器的pipeline，并控制显示硬件将图像缓冲区scanout到屏幕上，而如何加速生成framebuffer中的内容则是3D引擎（即Render API）负责的事情。</p><p>对于KMS，有如下要素：</p><ul><li>显存管理器</li><li>modesetting API</li><li>显示API</li></ul><p>在研究初期，研究案例最好硬件无关，且比较容易懂原理，且能够正常运行，可以参考virtio-gpu和QXL虚拟显卡。等到对内核DRM子系统有一定的理解后，可以分析简单的显卡硬件，如VC4（树莓派3B的显卡）。</p><h1 id=阅读路径>阅读路径</h1><p>需要看的东西有点多，甚至说比较乱。先列举一下：</p><p>内核中的内容：</p><ul><li>DRM驱动通用代码：包括GEM，KMS</li><li>AMD显卡相关的代码：AMDGPU，RADEON，AMDKFD（通用计算ROCM框架内核驱动）</li></ul><p>用户态代码：</p><ul><li>MESA： OpenGL state tracker， gallium 3D， vulkan， egl（重点），gbm</li><li>libdrm：基本为内核提供的IOCTL的wrapper</li></ul><p>我想要重点理解的部分：</p><ul><li>context到底是什么？如OpenGL和egl创建的context</li><li>mesa的架构</li><li>wayland渲染的基本原理</li><li>DRI到底由什么构成</li></ul><p>这里我觉得还是先从MESA这里着手，毕竟内核驱动缺少文档，且我对接口层到底怎么用还是不是很熟悉。看一下简单的DUMB驱动如何实现也是一个理解KMS比较好的方法。</p><h1 id=gem>GEM</h1><h2 id=gem与ttm之间的关系>GEM与TTM之间的关系</h2><p>TTM是内核最初的DRM显存管理器，其设计思想是试图为所有的显卡驱动提供一个公共的API。TTM后面被认为是失败的，其API与实现复杂不可控，没有人愿意用他。后来intel吸取教训，设计了GEM，其设计较为灵活，只提供基本的实现，部分功能需要驱动程序通过驱动自定的接口进行扩展。GEM与TTM在特性上的主要区别为GEM不支持管理独立显存，只支持UMA，而TTM两种都支持。目前的DRM驱动程序中，基本都使用GEM作为前端为用户态提供接口，而涉及到管理独立显存的时候，则借助TTM作为后端实现管理功能。</p><h2 id=框架初始化>框架初始化</h2><p>驱动程序可以自己选择是否使用GEM框架，如果选择使用，则需要在注册<code>drm_driver</code>到DRM core中时，在<code>driver_features</code>里设置DRIVER_GEM标志。在驱动加载时，DRM框架会自动初始化GEM。</p><h2 id=handle与name>handle与name</h2><p>handle是gem_object的引用，其作用域被限制在drm文件描述符内，用于用户态程序引用内核态的drm_gem_object。当drm文件描述符被关闭时，所有的handle都会被关闭。而name则是drm_gem_object的名称，为一个32-bit整数。name的作用域是全局的，因此被直接保存在drm_gem_object内。默认情况下drm_gem_object的name都为0，表示其是未命名的。用户态可以通过FLINK为drm_gem_object命名，之后系统内的其他进程可以通过对应的name对该drm_gem_object进行访问。</p><p>handle的创建是创建GEM对象的一个步骤。目前GEM对象的创建一般是通过设备相关的API进行实现的，驱动程序可以通过<code>drm_gem_handle_create</code>函数从对应drm文件中创建一个handle返回给用于态。关于handle，gem core中还提供了<code>drm_gem_handle_delete</code>和<code>drm_gem_handle_lookup</code>函数。事实上，handle的管理是通过idr实现的。</p><h2 id=drm_gem_object>drm_gem_object</h2><p>该对象是GEM内存管理的核心。GEM目前提供的功能是不完全的，部分空缺需要驱动自行填补，因此GEM框架要求驱动在<code>drm_gem_object</code>的基础上实现自己的GEM对象。这个操作实际上就是将<code>drm_gem_object</code>嵌入到驱动自己定义的<code>{driver}_gem_object</code>中。<code>drm_gem_object</code>定义在<code>include/drm/drm_gem.h</code>中，且有详细的注释，这里不再赘述，重点分析一些字段。</p><p><code>filp</code>是一个指向<code>struct file</code>的指针，要理解它的作用就必须理解真正的内存是如何分配的。前面提到了GEM只支持UMA，即显卡使用RAM做为显存，这就又涉及到了两种情况。在PC中由于IOMMU的存在，显卡并不强制要求连续的物理内存，因此GEM可以使用SHMFS做为存储后端，此时filp指针就指向对应的文件描述符。而在嵌入式应用场景下，大部分设备没有IOMMU，因此必须要求连续的物理内存，此时filp为NULL，驱动通过CMA申请到连续的物理内存用作存储后端。注意，GEM框架并不负责管理存储后端，只提供了一些基本的helper，而存储的分配与释放完全由驱动程序控制。</p><p>TODO： 研究一下SHMFS</p><p><code>vma_node</code>简单来说是保存了这个object的mmap偏移量。这里又需要提及<code>drm_gem_object</code>向用户态的映射问题。GEM目前基本上是通过两种方式实现MAP gem_object到用户态的：设备相关IOCTL和基于drm文件描述符的mmap。后者通过一个虚拟的偏移量确定mmap究竟在映射哪一个<code>drm_gem_object</code>。该机制的实现细节需要单独讨论。</p><p><code>dma_buf</code>字段是一个<code>struct dma_buf</code>类型的字段。这里又设计drm-prime框架的细节了。简单来说，通过name来实现进程间共享<code>drm_gem_object</code>存在显而易见的安全性问题，毕竟name是全局的。攻击者可以通过特定的pattern推测或者枚举<code>drm_gem_object</code>的name，达到窃取数据的目的。后续GEM集成了dma_buf，可以通过dma_buf实现共享。</p><h2 id=用户态映射>用户态映射</h2><p>用户态映射实质上就是将<code>drm_gem_object</code>描述的存储空间映射到用户态进程的虚拟地址空间，让用户态进程可以随机读写。正如前面提到的，这里只分析GEM提供的方式，即基于drm文件描述符的mmap。我们知道mmap系统调用的原型如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>void</span> <span class=o>*</span><span class=nf>mmap</span><span class=p>(</span><span class=kt>void</span> <span class=o>*</span><span class=n>addr</span><span class=p>,</span> <span class=n>size_t</span> <span class=n>length</span><span class=p>,</span> <span class=kt>int</span> <span class=n>prot</span><span class=p>,</span> <span class=kt>int</span> <span class=n>flags</span><span class=p>,</span> <span class=kt>int</span> <span class=n>fd</span><span class=p>,</span> <span class=n>off_t</span> <span class=n>offset</span><span class=p>);</span> 
+</code></pre></td></tr></table></div></div><p>GEM框架可以为每一个<code>drm_gem_object</code>绑定一个特定虚拟offset，通过offset辨别需要映射到用户态的<code>drm_gem_object</code>。该机制需要drm文件描述符与<code>drm_gem_object</code>的共同协作，前面看到<code>drm_gem_object</code>中提供了vma_node用于保存该信息，驱动程序需要自行调用<code>drm_gem_create_mmap_offset</code>为一个<code>drm_gem_object</code>注册一个虚拟offset。虚拟offset需要通过设备相关的IOCTL传递给用户态。<code>drm_device</code>中存在vma_offset_manager用于统一管理mmap的虚拟offset，其后端基本上为drm_mm与红黑树缓存的组合。</p><h1 id=dumb>DUMB</h1><p>(TODO)</p><h1 id=gbm>GBM</h1><p>前面看到基于GEM的驱动对外是没有提供统一的内存管理接口的，至少Buffer Object创建销毁等操作是需要自行提供设备相关的即口进行实现的。用户态没有统一的接口对缓冲区进行管理，这导致某些特定用户态程序的开发的困难，如wayland compositor。MESA项目提供了libgbm，抽象并实现了一个通用的buffer管理API。这里记录对该API进行的探讨。</p><h2 id=note>Note</h2><p>经过代码分析，gbm实际上来源于MESA内存OpenGL实现的<code>internal/drm_interface.h</code>，也就是Mesa OpenGL实现的一个私有兼容层。</p><h2 id=gbm_device>gbm_device</h2><p><code>gbm_device</code>是DRM设备的抽象，管理所有的分配出来的BO（Buffer Object）。自然而然：</p><ul><li>一个<code>gbm_device</code>创建出来的BO的生命周期与该<code>gbm_device</code>绑定</li><li><code>gbm_device</code>与特定DRI设备绑定</li></ul><p><code>gbm_create_device</code>负责从一个DRM设备中创建<code>gbm_device</code>：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>gbm_device</span><span class=o>*</span> <span class=nf>gbm_create_device</span><span class=p>(</span><span class=kt>int</span> <span class=n>fd</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>这里的fd自然是打开<code>/dev/dri/card*</code>时的文件描述符。</p><h2 id=gbm_bo>gbm_bo</h2><p><code>gbm_bo_create</code>函数用于创建BO，其原型如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>gbm_bo</span> <span class=o>*</span>
+<span class=nf>gbm_bo_create</span><span class=p>(</span><span class=k>struct</span> <span class=n>gbm_device</span> <span class=o>*</span><span class=n>gbm</span><span class=p>,</span>
+              <span class=n>uint32_t</span> <span class=n>width</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=n>height</span><span class=p>,</span>
+              <span class=n>uint32_t</span> <span class=n>format</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=n>flags</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>函数非常简单，只需要指定BO的长宽，格式以及标志（enum gbm_bo_flags）。GBM提供了一些基本的helper用于获取BO的相关属性。除此之外比较重要的操作就是将BO映射到用户态地址空间了：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>void</span> <span class=o>*</span><span class=nf>gbm_bo_map</span> <span class=p>(</span><span class=k>struct</span> <span class=n>gbm_bo</span> <span class=o>*</span><span class=n>bo</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=n>x</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=n>y</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=n>width</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=n>height</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=n>flags</span><span class=p>,</span> <span class=n>uint32_t</span> <span class=o>*</span><span class=n>stride</span><span class=p>,</span> <span class=kt>void</span> <span class=o>**</span><span class=n>map_data</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>可以看到该函数提供了将BO中的特定二维区域映射到功能。</p><h1 id=kms>KMS</h1><p>主要分为用户态接口的使用，内核提供的框架和通用接口。</p><p>KMS将整个显示pipeline抽象成以下几个部分：</p><ul><li>framebuffer</li><li>plane</li><li>crtc</li><li>encoder</li><li>connector</li></ul><p>其中每一个部分的含义可以参考内核文档，这里不赘述，这里只分析其在内核框架中是如何实现的。</p><h2 id=对象管理>对象管理</h2><p>对于这几个对象，DRM框架将其称作“对象”，有一个公共的基类<code>struct drm_mode_object</code>，这个几个对象都由这个基类扩展而来。事实上，这个基类扩展出来的子类并不是只有上面提到的几种。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>drm_mode_object</span> <span class=p>{</span>
+  <span class=n>uint32_t</span> <span class=n>id</span><span class=p>;</span>
+  <span class=n>uint32_t</span> <span class=n>type</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>drm_object_properties</span> <span class=o>*</span><span class=n>properties</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>kref</span> <span class=n>refcount</span><span class=p>;</span>
+  <span class=kt>void</span> <span class=p>(</span><span class=o>*</span><span class=n>free_cb</span><span class=p>)(</span><span class=k>struct</span> <span class=n>kref</span> <span class=o>*</span><span class=n>kref</span><span class=p>);</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>其中id和type分别为这个对象在KMS子系统中的ID和类型（即上面提到的几种）。注意所有的<code>drm_mode_object</code>的id共用一个namespace，保存在<code>drm_device->mode_config.object_idr</code>中。因此，框架提供了<code>drm_mode_object_find</code>函数用于查找对应id的对象。当前DRM框架中存在如下的对象类型：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span><span class=lnt>9
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define DRM_MODE_OBJECT_CRTC 0xcccccccc
+</span><span class=cp>#define DRM_MODE_OBJECT_CONNECTOR 0xc0c0c0c0
+</span><span class=cp>#define DRM_MODE_OBJECT_ENCODER 0xe0e0e0e0
+</span><span class=cp>#define DRM_MODE_OBJECT_MODE 0xdededede
+</span><span class=cp>#define DRM_MODE_OBJECT_PROPERTY 0xb0b0b0b0
+</span><span class=cp>#define DRM_MODE_OBJECT_FB 0xfbfbfbfb
+</span><span class=cp>#define DRM_MODE_OBJECT_BLOB 0xbbbbbbbb
+</span><span class=cp>#define DRM_MODE_OBJECT_PLANE 0xeeeeeeee
+</span><span class=cp>#define DRM_MODE_OBJECT_ANY 0
+</span></code></pre></td></tr></table></div></div><p>从<code>drm_mode_object</code>的定义中即可发现其实现了两个比较重要的功能：</p><ul><li>引用计数及生命周期管理</li><li>属性管理</li></ul><p>属性在DRM中由<code>struct drm_property</code>表示，其本质是一个<code>DRM_MODE_OBJECT_PROPERTY</code>类型的<code>drm_mode_object</code>。一个<code>drm_mode_object</code>的所有属性保存在其内部的<code>drm_object_properties</code>中，其实现如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>drm_object_properties</span> <span class=p>{</span>
+  <span class=kt>int</span> <span class=n>count</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>drm_property</span> <span class=o>*</span><span class=n>properties</span><span class=p>[</span><span class=n>DRM_OBJECT_MAX_PROPERTY</span><span class=p>];</span>
+  <span class=n>uint64_t</span> <span class=n>values</span><span class=p>[</span><span class=n>DRM_OBJECT_MAX_PROPERTY</span><span class=p>];</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>可以看到每一个对象最多可以有24个属性。这里注意一个实现细节，<code>drm_property</code>表示一个属性对象，描述属性的类型（如整形，range，浮点数等）、名称和取值范围（约束）。<code>drm_object_properties</code>中的properties保存属性的类型，而<code>values</code>保存对应类型的值。这是因为同一类型的对象基本上都共有特定名称和类型的属性，独立的属性对象使得我们不需要为在每一个对象中都保存同样的属性名称和类型。对象的属性可以通过<code>drm_object_property_*</code>函数操作。</p><h2 id=atomic-mode-setting>Atomic Mode Setting</h2><p>先写一下我的理解，看看到最后读完代码有什么新收获没有。</p><p>首先Atomic Mode Setting是DRM子系统最近的一次比较大的改动，其目的是填补当前API的不足。由于原先的API不支持同时更新整个DRM显示pipeline的状态，因此KMS过程中会出现一些中间状态，容易造成开发者不希望看见的结果，影响用户体验。同时，原先的KMS接口也不支持回滚，需要应用程序自己记录原先的配置状态，Atomic Mode Setting也解决了这个问题。</p><p>由于Atomic Mode Setting是新出现的API，为了解决用户态程序的兼容性问题，Atomic Mode Setting的接口被隐藏起来，只有用户态程序显式告知DRM层其支持Atomic Mode Setting时它的接口才会暴露出来。目前主流的开源驱动基本都已经迁移到了Atomic Mode Setting接口上了。</p><p>Atomic Mode Setting接口在用户态看来，是将原先各个KMS object的状态由隐式的通过API更新，变成了显式的对象属性。用户态程序可以通过通用的属性操作接口读写KMS object上的属性，更改不会立即生效，而是缓存起来。当应用程序更新完其所有想要更新的属性时，可以通过Commit操作告知要求KMS层真正的更新硬件的状态。此时驱动程序需要验证应用程序要求进行的修改是否合法，在合法的情况下，可以一次性完成整个显示状态的修改。Atomic Mode Setting也实现了只用于检查新状态是否合法的接口。</p><p>由于Atomic Mode Setting提供的接口的功能是强于原先的KMS接口的，因此原先的KMS接口可以被Atomic Mode Setting接口实现。KMS Core提供了一些helper函数用以帮助驱动程序作者实现原先的Legacy KMS接口[<a href=https://www.kernel.org/doc/html/latest/gpu/drm-kms-helpers.html#atomic-modeset-helper-functions-reference title="Atomic Modeset Helper Functions Reference">1</a>]<a href=https://www.kernel.org/doc/html/latest/gpu/drm-kms-helpers.html#atomic-modeset-helper-functions-reference title="Atomic Modeset Helper Functions Reference">1</a>。</p><p>由于Legacy接口注定要扔到历史垃圾箱，后续的所有分析都是以<code>Atomic Mode Setting</code>的code path作为基准。</p><h2 id=驱动接口>驱动接口</h2><p>驱动实现KMS接口的方式如下：</p><ul><li>在probe函数中调用<code>drm_mode_config_init</code>函数初始化KMS core</li><li>填充mode_config中int min_width, min_height; int max_width, max_height的值，这些值是framebuffer的大小限制</li><li>设置mode_config中的funcs</li></ul><p>下面以virtio-gpu为例分析驱动的实现。对于virtio-gpu上面的操作步骤实现如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=n>drm_mode_config_init</span><span class=p>(</span><span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=p>);</span>
+        <span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>quirk_addfb_prefer_host_byte_order</span> <span class=o>=</span> <span class=nb>true</span><span class=p>;</span>
+        <span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>funcs</span> <span class=o>=</span> <span class=o>&amp;</span><span class=n>virtio_gpu_mode_funcs</span><span class=p>;</span>
+        <span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>helper_private</span> <span class=o>=</span> <span class=o>&amp;</span><span class=n>virtio_mode_config_helpers</span><span class=p>;</span>
+
+        <span class=cm>/* modes will be validated against the framebuffer size */</span>
+        <span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>min_width</span> <span class=o>=</span> <span class=n>XRES_MIN</span><span class=p>;</span>
+        <span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>min_height</span> <span class=o>=</span> <span class=n>YRES_MIN</span><span class=p>;</span>
+        <span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>max_width</span> <span class=o>=</span> <span class=n>XRES_MAX</span><span class=p>;</span>
+        <span class=n>vgdev</span><span class=o>-&gt;</span><span class=n>ddev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>max_height</span> <span class=o>=</span> <span class=n>YRES_MAX</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>funcs中填充的内容如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=k>const</span> <span class=k>struct</span> <span class=n>drm_mode_config_funcs</span> <span class=n>virtio_gpu_mode_funcs</span> <span class=o>=</span> <span class=p>{</span>
+        <span class=p>.</span><span class=n>fb_create</span> <span class=o>=</span> <span class=n>virtio_gpu_user_framebuffer_create</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_check</span> <span class=o>=</span> <span class=n>drm_atomic_helper_check</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_commit</span> <span class=o>=</span> <span class=n>drm_atomic_helper_commit</span><span class=p>,</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><h2 id=helper架构>helper架构</h2><p>helper架构是我起的名，知道是指什么东西就好。DRM子系统的API比较难抽象，简单来说就是硬件各有各的不同，很多情况下，驱动可以使用一个共同的实现，而在其它情况下，驱动需要提供自己的实现。因此，DRM驱动核心的接口使用了helper架构，其基本思想是通过一组回调函数抽象特定组件的操作，比如<code>drm_connector_funcs</code>，同时又使用另外一组helper函数给出了原先那组回调函数的通用实现，让开发最者实现这组helper函数抽象出的回调函数即可。</p><p>这样双层的实现即能保证开发者有足够高的自由度（完全不用helper函数），也能简化开发者的开发（使用helper函数），同时提供给开发者hook特定helper函数的能力。下面以<code>drm_connector</code>为例说明helper架构的实现与使用方式。</p><p>正常情况下，创建<code>drm_connector</code>对象时需要提供<code>struct drm_connector_funcs</code>回调函数组，而使用helper函数时，可以直接用helper函数填充对应回调函数：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=k>const</span> <span class=k>struct</span> <span class=n>drm_connector_funcs</span> <span class=n>vc4_hdmi_connector_funcs</span> <span class=o>=</span> <span class=p>{</span>
+        <span class=p>.</span><span class=n>detect</span> <span class=o>=</span> <span class=n>vc4_hdmi_connector_detect</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>fill_modes</span> <span class=o>=</span> <span class=n>drm_helper_probe_single_connector_modes</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>destroy</span> <span class=o>=</span> <span class=n>vc4_hdmi_connector_destroy</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>reset</span> <span class=o>=</span> <span class=n>drm_atomic_helper_connector_reset</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_duplicate_state</span> <span class=o>=</span> <span class=n>drm_atomic_helper_connector_duplicate_state</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_destroy_state</span> <span class=o>=</span> <span class=n>drm_atomic_helper_connector_destroy_state</span><span class=p>,</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>事实上helper函数并不万能，只是抽象出了大多数驱动程序应该共享的行为，而特定于硬件的部分，则需要以回调函数的形式提供给helper函数，这个回调函数组由<code>struct drm_connector_helper_funcs</code>提供。在创建<code>drm_connector</code>时，需要通过<code>drm_connector_helper_add</code>函数注册。函数将对应的回调函数对象的地址保存在了<code>drm_connector</code>中的<code>helper_private</code>指针中，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=kr>inline</span> <span class=kt>void</span> <span class=nf>drm_connector_helper_add</span><span class=p>(</span><span class=k>struct</span> <span class=n>drm_connector</span> <span class=o>*</span><span class=n>connector</span><span class=p>,</span>
+                                            <span class=k>const</span> <span class=k>struct</span> <span class=n>drm_connector_helper_funcs</span> <span class=o>*</span><span class=n>funcs</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=n>connector</span><span class=o>-&gt;</span><span class=n>helper_private</span> <span class=o>=</span> <span class=n>funcs</span><span class=p>;</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>这一套实现位于<code>include/drm/drm_modeset_helper_vtables.h</code>中，其他的DRM对象都有类似的实现，可以详细阅读<code>drm_connector_helper_funcs</code>的注释，理解其中对应的回调函数的用途。在实现DRM驱动时，helper架构会频繁用到，合理掌握helper函数可以极大简化开发，提升驱动程序的兼容性。</p><h2 id=crtc>CRTC</h2><h2 id=framebuffer>Framebuffer</h2><p><a href=https://www.kernel.org/doc/html/latest/gpu/drm-kms.html#frame-buffer-abstraction>内核文档</a></p><p>framebuffer应该是唯一一个与硬件无关的抽象了。驱动程序需要提供自己的framebuffer实现，其主要入口就是前面提到的<code>drm_mode_config_funcs->fb_create</code>回调函数。驱动程序通过扩展<code>drm_framebuffer</code>结构体可以向framebuffer中加入自己私有的字段。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>virtio_gpu_framebuffer</span> <span class=p>{</span>
+        <span class=k>struct</span> <span class=n>drm_framebuffer</span> <span class=n>base</span><span class=p>;</span>
+        <span class=k>struct</span> <span class=n>virtio_gpu_fence</span> <span class=o>*</span><span class=n>fence</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>创建framebuffer时，需要通过<code>drm_framebuffer_init</code>函数将framebuffer初始化，并导出到用户空间。<code>fb_create</code>函数接受一个<code>drm_mode_fb_cmd2</code>类型的参数：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>drm_mode_fb_cmd2</span> <span class=p>{</span>
+        <span class=n>__u32</span> <span class=n>fb_id</span><span class=p>;</span>
+        <span class=n>__u32</span> <span class=n>width</span><span class=p>;</span>
+        <span class=n>__u32</span> <span class=n>height</span><span class=p>;</span>
+        <span class=n>__u32</span> <span class=n>pixel_format</span><span class=p>;</span> <span class=cm>/* fourcc code from drm_fourcc.h */</span>
+        <span class=n>__u32</span> <span class=n>flags</span><span class=p>;</span> <span class=cm>/* see above flags */</span>
+        <span class=n>__u32</span> <span class=n>handles</span><span class=p>[</span><span class=mi>4</span><span class=p>];</span>
+        <span class=n>__u32</span> <span class=n>pitches</span><span class=p>[</span><span class=mi>4</span><span class=p>];</span> <span class=cm>/* pitch for each plane */</span>
+        <span class=n>__u32</span> <span class=n>offsets</span><span class=p>[</span><span class=mi>4</span><span class=p>];</span> <span class=cm>/* offset of each plane */</span>
+        <span class=n>__u64</span> <span class=n>modifier</span><span class=p>[</span><span class=mi>4</span><span class=p>];</span> <span class=cm>/* ie, tiling, compress */</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>其中最重要的就是handle，handle是Buffer Object的指针，该Buffer Object就是被创建framebuffer的存储后端。</p><p>TODO framebuffer releated operation</p><h2 id=plane>Plane</h2><p><a href=https://www.kernel.org/doc/html/latest/gpu/drm-kms.html#plane-abstraction>内核文档</a></p><p>plane由<code>drm_plane</code>表示，其本质是对显示控制器中scanout硬件的抽象。简单来说，给定一个plane，可以让其与一个framebuffer关联表示进行scanout的数据，同时控制控制scanout时进行的额外操作，比如colorspace的改变，旋转、拉伸等操作。<code>drm_plane</code>是与硬件强相关的，显示控制器支持的plane是固定的，其支持的功能也是由硬件决定的。</p><p>对于<code>drm_plane</code>的分析，我们从其结构体定义入手。首先可以看到，一个plane必须要与一个<code>drm_deivce</code>关联，且一个<code>drm_device</code>中支持的所有plane都被保存在一个链表中。<code>drm_plane</code>中存有一个mask，用以表示该<code>drm_plane</code>可以绑定的CRTC。同时<code>drm_plane</code>中也保存了一个<code>format_types</code>数组，表示该<code>plane</code>支持的framebuffer格式。</p><p>所有的<code>drm_plane</code>必为三种类型之一：</p><ul><li><code>Primary</code> - 主plane，一般控制整个显示器的输出。CRTC必须要有一个这样的plane。</li><li><code>Curosr</code> - 表示鼠标光标，可选。</li><li><code>Overlay</code> - 叠加plane，可以在主plane上叠加一层输出，可选。</li></ul><p>来回顾一点历史：内核向用户态导出的接口实际上不包含<code>Primary Plane</code>，对应plane的接口只能操作<code>Cursor Plane</code>和<code>Overlay Plane</code>，后期提供了一个<code>Universial Plane</code>特性，使得用户态API可以直接操作<code>Primary Plane</code>。在明白这个历史遗留问题后，对<code>drm_plane</code>的实现就好理解了。</p><h2 id=encoder>Encoder</h2><h2 id=mode>Mode</h2><p>一般人对mode的理解仅仅是分辨率，这种理解在DRM中是不够的，不足以理解<code>drm_display_mode</code>是干什么的。简单来说，mode是一组信号时序，用以驱动显示器正确显示一帧图像。首先能够猜到需要传什么东西给显示器：像素数据。而到底多少个像素就跟显示器的分辨率有关了，如1080p的显示器需要传递<code>1080 x 1920</code>个像素。更加具体的形式是一行一行的从左到右发送，由于硬件实现需要，需要额外的步骤对信号进行同步。帧与帧之间被称为vertical，即竖直的，而行与行之间被称为horizontal，即水平的，这直接对应于显示器的横竖方向。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c> <span class=o>*</span>               <span class=n>Active</span>                 <span class=n>Front</span>           <span class=n>Sync</span>           <span class=n>Back</span>
+ <span class=o>*</span>              <span class=n>Region</span>                 <span class=n>Porch</span>                          <span class=n>Porch</span>
+ <span class=o>*</span>     <span class=o>&lt;-----------------------&gt;&lt;----------------&gt;&lt;-------------&gt;&lt;--------------&gt;</span>
+ <span class=o>*</span>       <span class=c1>//////////////////////|
+</span><span class=c1></span> <span class=o>*</span>      <span class=c1>////////////////////// |
+</span><span class=c1></span> <span class=o>*</span>     <span class=c1>//////////////////////  |..................               ................
+</span><span class=c1></span> <span class=o>*</span>                                                <span class=n>_______________</span>
+ <span class=o>*</span>     <span class=o>&lt;-----</span> <span class=p>[</span><span class=n>hv</span><span class=p>]</span><span class=n>display</span> <span class=o>-----&gt;</span>
+ <span class=o>*</span>     <span class=o>&lt;-------------</span> <span class=p>[</span><span class=n>hv</span><span class=p>]</span><span class=n>sync_start</span> <span class=o>------------&gt;</span>
+ <span class=o>*</span>     <span class=o>&lt;---------------------</span> <span class=p>[</span><span class=n>hv</span><span class=p>]</span><span class=n>sync_end</span> <span class=o>---------------------&gt;</span>
+ <span class=o>*</span>     <span class=o>&lt;--------------------------------</span> <span class=p>[</span><span class=n>hv</span><span class=p>]</span><span class=n>total</span> <span class=o>-----------------------------&gt;*</span>
+</code></pre></td></tr></table></div></div><p>上面内核注释中的字符画完美的解释了<code>drm_display_mode</code>中变量的定义。需要注意的是现实状况中，还有需要其它复杂的显示模式，比如interlaced模式等，所以<code>drm_display_mode</code>区分逻辑参数与硬件参数，硬件参数就是真正进行硬件操作时使用的参数，而逻辑参数是为了方便驱动开发人员进行的抽象，<code>drm_display_mode</code>根据相应的flag计算出硬件参数。</p><p>除了上述直接与硬件相关的参数，<code>drm_display_mode</code>还携带了一些DRM相关的属性。比如类型：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=cm>/**
+</span><span class=cm>         * @type:
+</span><span class=cm>         *
+</span><span class=cm>         * A bitmask of flags, mostly about the source of a mode. Possible flags
+</span><span class=cm>         * are:
+</span><span class=cm>         *
+</span><span class=cm>         *  - DRM_MODE_TYPE_PREFERRED: Preferred mode, usually the native
+</span><span class=cm>         *    resolution of an LCD panel. There should only be one preferred
+</span><span class=cm>         *    mode per connector at any given time.
+</span><span class=cm>         *  - DRM_MODE_TYPE_DRIVER: Mode created by the driver, which is all of
+</span><span class=cm>         *    them really. Drivers must set this bit for all modes they create
+</span><span class=cm>         *    and expose to userspace.
+</span><span class=cm>         *  - DRM_MODE_TYPE_USERDEF: Mode defined via kernel command line
+</span><span class=cm>         */</span>
+		<span class=kt>unsigned</span> <span class=kt>int</span> <span class=n>type</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>可以看到mode的两个来源：驱动创建和内核命令行自行定义。而<code>DRM_MODE_TYPE_PREFERRED</code>标记的<code>drm_display_mode</code>则一般为对应connector的native mode。除此之外一个比较重要的属性就是status：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=cm>/**
+</span><span class=cm>         * @status:
+</span><span class=cm>         *
+</span><span class=cm>         * Status of the mode, used to filter out modes not supported by the
+</span><span class=cm>         * hardware. See enum &amp;drm_mode_status.
+</span><span class=cm>         */</span>
+        <span class=k>enum</span> <span class=n>drm_mode_status</span> <span class=n>status</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>该属性直接标记该mode是否可以被硬件接受，如果不行，则会标注出具体原因。对应显示器的长宽一般会由<code>width_mm</code>和<code>height_mm</code>记录，单位是毫米。最后注意<code>drm_display_mode</code>一般与<code>drm_connector</code>关联，因此<code>drm_modes.c</code>中提供了相应的helper函数，比如：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>void</span> <span class=nf>drm_mode_probed_add</span><span class=p>(</span><span class=k>struct</span> <span class=n>drm_connector</span> <span class=o>*</span><span class=n>connector</span><span class=p>,</span>
+                         <span class=k>struct</span> <span class=n>drm_display_mode</span> <span class=o>*</span><span class=n>mode</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=n>WARN_ON</span><span class=p>(</span><span class=o>!</span><span class=n>mutex_is_locked</span><span class=p>(</span><span class=o>&amp;</span><span class=n>connector</span><span class=o>-&gt;</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>mutex</span><span class=p>));</span>
+
+        <span class=n>list_add_tail</span><span class=p>(</span><span class=o>&amp;</span><span class=n>mode</span><span class=o>-&gt;</span><span class=n>head</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>connector</span><span class=o>-&gt;</span><span class=n>probed_modes</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p><code>drm_mode_probed_add</code>函数将该mode添加到一个connector的管理中。注意probed_modes列表中可能包含了许多硬件无法使用的mode，对于这样的一个列表，可以使用<code>drm_mode_prune_invalid</code>将其中非法的mode清除。</p><h2 id=connector>Connector</h2><p>首先明确connector抽象了什么东西。从内核文档的描述中可以明白，connector抽象的是一个<strong>能够显示像素的设备</strong>，从流媒体的角度来说，就是一个sink，是最终的图像输出的地方。或者更加具象的理解一下，字面意思就是显卡上面的接头，比如HDMI，DP等接头。connector由<code>struct drm_connector</code>进行表示，并定义在<code>include/drm/drm_connector.h</code>中，接下来就分析其相关实现。</p><p>首先从该结构体的定义下手，可以看到结构体定义开始比较长的，先从常规部分下手：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>drm_connector</span> <span class=p>{</span>
+        <span class=cm>/** @dev: parent DRM device */</span>
+        <span class=k>struct</span> <span class=n>drm_device</span> <span class=o>*</span><span class=n>dev</span><span class=p>;</span>
+        <span class=cm>/** @kdev: kernel device for sysfs attributes */</span>
+        <span class=k>struct</span> <span class=n>device</span> <span class=o>*</span><span class=n>kdev</span><span class=p>;</span>
+        <span class=cm>/** @attr: sysfs attributes */</span>
+        <span class=k>struct</span> <span class=n>device_attribute</span> <span class=o>*</span><span class=n>attr</span><span class=p>;</span>
+		<span class=p>.......</span>
+</code></pre></td></tr></table></div></div><p>很明显，从这里看出，内核认为<code>struct drm_connector</code>是sysfs树形结构的一员，翻译一下，就是一个<code>struct drm_connector</code>对象会对应<code>/sys</code>目录下的某个子文件夹（节点）。有关该文件夹中相关的属性文件可以后续进行分析。</p><p>接下来可以看到明白一个<code>drm_device</code>中的所有connector都会被保存在一个链表中，进行管理，且<code>drm_connector</code>是一个<code>drm_mode_object</code>：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=cm>/**
+</span><span class=cm>         * @head:
+</span><span class=cm>         *
+</span><span class=cm>         * List of all connectors on a @dev, linked from
+</span><span class=cm>         * &amp;drm_mode_config.connector_list. Protected by
+</span><span class=cm>         * &amp;drm_mode_config.connector_list_lock, but please only use
+</span><span class=cm>         * &amp;drm_connector_list_iter to walk this list.
+</span><span class=cm>         */</span>
+        <span class=k>struct</span> <span class=n>list_head</span> <span class=n>head</span><span class=p>;</span>
+
+        <span class=cm>/** @base: base KMS object */</span>
+        <span class=k>struct</span> <span class=n>drm_mode_object</span> <span class=n>base</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>从这里之后，与<code>drm_connector</code>相关的分析主要以逻辑功能进行划分，而不应采取线性分析的方式。每一个<code>drm_connector</code>都应该定义一个类型，并保存在<code>drm_connector</code>中：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=cm>/**
+</span><span class=cm>         * @connector_type:
+</span><span class=cm>         * one of the DRM_MODE_CONNECTOR_&lt;foo&gt; types from drm_mode.h
+</span><span class=cm>         */</span>
+        <span class=kt>int</span> <span class=n>connector_type</span><span class=p>;</span>
+        <span class=cm>/** @connector_type_id: index into connector type enum */</span>
+        <span class=kt>int</span> <span class=n>connector_type_id</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>内核支持的<code>drm_connector</code>类型是uapi的一部分，定义在<code>include/uapi/drm/drm_mode.h</code>中：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define DRM_MODE_CONNECTOR_Unknown      0
+</span><span class=cp>#define DRM_MODE_CONNECTOR_VGA          1
+</span><span class=cp>#define DRM_MODE_CONNECTOR_DVII         2
+</span><span class=cp>#define DRM_MODE_CONNECTOR_DVID         3
+</span><span class=cp>#define DRM_MODE_CONNECTOR_DVIA         4
+</span><span class=cp>#define DRM_MODE_CONNECTOR_Composite    5
+</span><span class=cp>#define DRM_MODE_CONNECTOR_SVIDEO       6
+</span><span class=cp>#define DRM_MODE_CONNECTOR_LVDS         7
+</span><span class=cp>#define DRM_MODE_CONNECTOR_Component    8
+</span><span class=cp>#define DRM_MODE_CONNECTOR_9PinDIN      9
+</span><span class=cp>#define DRM_MODE_CONNECTOR_DisplayPort  10
+</span><span class=cp>#define DRM_MODE_CONNECTOR_HDMIA        11
+</span><span class=cp>#define DRM_MODE_CONNECTOR_HDMIB        12
+</span><span class=cp>#define DRM_MODE_CONNECTOR_TV           13
+</span><span class=cp>#define DRM_MODE_CONNECTOR_eDP          14
+</span><span class=cp>#define DRM_MODE_CONNECTOR_VIRTUAL      15
+</span><span class=cp>#define DRM_MODE_CONNECTOR_DSI          16
+</span><span class=cp>#define DRM_MODE_CONNECTOR_DPI          17
+</span><span class=cp>#define DRM_MODE_CONNECTOR_WRITEBACK    18
+</span></code></pre></td></tr></table></div></div><p>很明显，connector驱动在初始化一个connector的时候应该设置connector的类型。与其他的drm对象类似，<code>drm_connector</code>的创建者需要提供一组回调函数，由于实现connector需要支持的一组操作：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=cm>/** @funcs: connector control functions */</span>
+        <span class=k>const</span> <span class=k>struct</span> <span class=n>drm_connector_funcs</span> <span class=o>*</span><span class=n>funcs</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><h3 id=drm_helper_probe_single_connector_modes>drm_helper_probe_single_connector_modes</h3><p>函数是一个helper，用于提供默认的<code>drm_connector_funcs->fill_modes</code>实现。本质上函数实现了对connector支持的<code>drm_display_mode</code>的扫描。从函数的注释中，可以看到函数进行的操作大致为：</p><ol><li>将connector中现有<code>modes</code>列表中的<code>drm_display_mode</code>全部标记为<code>MODE_STALE</code>状态</li><li>从以下三个来源收集<code>drm_display_mode</code>，并使用<code>drm_mode_probed_add</code>函数添加到<code>probed_list</code>中：<ul><li>&drm_connector_helper_funcs.get_modes回调函数</li><li>如果<code>drm_connector</code>目前已经连接，则加入VESA标准DMT模式<code>1024 x 768</code>（这个就是VGA接口没插稳检测不到EDID时分辨率变<code>1024x768</code>的原因了吧）</li><li>从内核命令行参数<code>video=</code>读取并生成<code>drm_display_mode</code></li></ul></li><li>将probed_list中的<code>drm_display_mode</code>移动到<code>modes</code>列表中，并合并冲突项</li><li>验证非STALE状态<code>drm_display_mode</code>的合法性</li><li>将所有非法的<code>drm_display_mode</code>从<code>modes</code>列表中删除</li></ol><h3 id=hotplug检测>hotplug检测</h3><p><code>drm_connector</code>支持hotplug且DRM中提供了相应的helper，简化实现。目前主要的helper有：</p><ul><li>drm_kms_helper_poll_init()用于提供轮询检测支持</li><li>drm_helper_hpd_irq_event()用于提供中断检测支持</li></ul><p>下面就来分析DRM对于轮询检测的helper实现。可以看到，该helper的实现非常简单，其基本原理是创建一个delayed_work并使能：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>void</span> <span class=nf>drm_kms_helper_poll_init</span><span class=p>(</span><span class=k>struct</span> <span class=n>drm_device</span> <span class=o>*</span><span class=n>dev</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=n>INIT_DELAYED_WORK</span><span class=p>(</span><span class=o>&amp;</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>output_poll_work</span><span class=p>,</span> <span class=n>output_poll_execute</span><span class=p>);</span>
+        <span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>poll_enabled</span> <span class=o>=</span> <span class=nb>true</span><span class=p>;</span>
+
+        <span class=n>drm_kms_helper_poll_enable</span><span class=p>(</span><span class=n>dev</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>而<code>drm_kms_helper_poll_enable</code>函数很明显就是用于重置并使能这个delayed_work。注意这个函数的调用参数为<code>drm_device</code>，也就是这个机制整个就是应用于一个<code>drm_device</code>的。在分析这个函数之前，可以发现一个模块参数<code>drm.poll</code>，用于控制轮询的行为：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=kt>bool</span> <span class=n>drm_kms_helper_poll</span> <span class=o>=</span> <span class=nb>true</span><span class=p>;</span>
+<span class=n>module_param_named</span><span class=p>(</span><span class=n>poll</span><span class=p>,</span> <span class=n>drm_kms_helper_poll</span><span class=p>,</span> <span class=kt>bool</span><span class=p>,</span> <span class=mo>0600</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p><code>drm_kms_helper_poll_enable</code>函数首先检查是否能够开启轮询模式，条件如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>poll_enabled</span> <span class=o>||</span> <span class=o>!</span><span class=n>drm_kms_helper_poll</span><span class=p>)</span>
+                <span class=k>return</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>也就是说，<code>drm.poll</code>模块参数可以直接影响轮询的行为。随后函数遍历所有的<code>drm_connector</code>，然后决定是否需要进行轮询：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=n>drm_connector_list_iter_begin</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>conn_iter</span><span class=p>);</span>
+        <span class=n>drm_for_each_connector_iter</span><span class=p>(</span><span class=n>connector</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>conn_iter</span><span class=p>)</span> <span class=p>{</span>
+                <span class=k>if</span> <span class=p>(</span><span class=n>connector</span><span class=o>-&gt;</span><span class=n>polled</span> <span class=o>&amp;</span> <span class=p>(</span><span class=n>DRM_CONNECTOR_POLL_CONNECT</span> <span class=o>|</span>
+                                         <span class=n>DRM_CONNECTOR_POLL_DISCONNECT</span><span class=p>))</span>
+                        <span class=n>poll</span> <span class=o>=</span> <span class=nb>true</span><span class=p>;</span>
+        <span class=p>}</span>
+        <span class=n>drm_connector_list_iter_end</span><span class=p>(</span><span class=o>&amp;</span><span class=n>conn_iter</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>这里注意到<code>drm_connector.polled</code>字段，它表示一个<code>drm_connector</code>的轮询模式，是一个bitflag，有如下三位：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>         <span class=o>*</span> <span class=n>DRM_CONNECTOR_POLL_HPD</span>
+         <span class=o>*</span>     <span class=n>The</span> <span class=n>connector</span> <span class=n>generates</span> <span class=n>hotplug</span> <span class=n>events</span> <span class=n>and</span> <span class=n>doesn</span><span class=err>&#39;</span><span class=n>t</span> <span class=n>need</span> <span class=n>to</span> <span class=n>be</span>
+         <span class=o>*</span>     <span class=n>periodically</span> <span class=n>polled</span><span class=p>.</span> <span class=n>The</span> <span class=n>CONNECT</span> <span class=n>and</span> <span class=n>DISCONNECT</span> <span class=n>flags</span> <span class=n>must</span> <span class=n>not</span>
+         <span class=o>*</span>     <span class=n>be</span> <span class=n>set</span> <span class=n>together</span> <span class=n>with</span> <span class=n>the</span> <span class=n>HPD</span> <span class=n>flag</span><span class=p>.</span>
+         <span class=o>*</span>
+         <span class=o>*</span> <span class=n>DRM_CONNECTOR_POLL_CONNECT</span>
+         <span class=o>*</span>     <span class=n>Periodically</span> <span class=n>poll</span> <span class=n>the</span> <span class=n>connector</span> <span class=k>for</span> <span class=n>connection</span><span class=p>.</span>
+         <span class=o>*</span>
+         <span class=o>*</span> <span class=n>DRM_CONNECTOR_POLL_DISCONNECT</span>
+         <span class=o>*</span>     <span class=n>Periodically</span> <span class=n>poll</span> <span class=n>the</span> <span class=n>connector</span> <span class=k>for</span> <span class=n>disconnection</span><span class=p>,</span> <span class=n>without</span>
+         <span class=o>*</span>     <span class=n>causing</span> <span class=n>flickering</span> <span class=n>even</span> <span class=n>when</span> <span class=n>the</span> <span class=n>connector</span> <span class=n>is</span> <span class=n>in</span> <span class=n>use</span><span class=p>.</span> <span class=n>DACs</span> <span class=n>should</span>
+         <span class=o>*</span>     <span class=n>rarely</span> <span class=k>do</span> <span class=n>this</span> <span class=n>without</span> <span class=n>a</span> <span class=n>lot</span> <span class=n>of</span> <span class=n>testing</span><span class=p>.</span>
+</code></pre></td></tr></table></div></div><p>简单来说就是检测所有的<code>drm_connector</code>中是否有需要轮询检测状态的，如果有则开启轮询。函数最后根据检测的结果打开轮询：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=k>if</span> <span class=p>(</span><span class=n>poll</span><span class=p>)</span>
+                <span class=n>schedule_delayed_work</span><span class=p>(</span><span class=o>&amp;</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>output_poll_work</span><span class=p>,</span> <span class=n>delay</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>默认情况下，第一次进行轮询的delay为1秒，否则为10秒：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define DRM_OUTPUT_POLL_PERIOD (10*HZ)
+</span></code></pre></td></tr></table></div></div><p>前面看到delayed_work的回调函数为<code>output_poll_execute</code>，函数的实现还是比较简单的。函数遍历<code>drm_device</code>所有的<code>drm_connector</code>，然后找到需要进行轮询的设备，并调用<code>drm_helper_probe_detect</code>检测这个<code>drm_connector</code>的状态。而<code>drm_helper_probe_detect</code>仅仅是调用了<code>drm_connector_helper_funcs</code>中注册的<code>detect_ctx</code>和<code>detect</code>回调函数。</p><p>对于支持中断的<code>drm_connector</code>，如果它是粗粒度的，即无法判断哪一个<code>drm_connector</code>状态发生了改变，则驱动开发者可以在进程上下文调用<code>drm_helper_hpd_irq_event</code>函数，检测所有标记了<code>DRM_CONNECTOR_POLL_HPD</code>的<code>drm_connector</code>。反之，则开发这可以自行调用<code>drm_kms_helper_hotplug_event</code>函数处理该事件。<code>drm_kms_helper_hotplug_event</code>的主要行为是发送uevent到用户态，并调用<code>dev->mode_config.funcs->output_poll_changed</code>回调函数。</p><h2 id=用户态调用路径>用户态调用路径</h2><p>对于与<code>drmModeSetCrtc</code>相关的legacy接口，其最终都调用到了IOCTL上：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=k>return</span> <span class=nf>DRM_IOCTL</span><span class=p>(</span><span class=n>fd</span><span class=p>,</span> <span class=n>DRM_IOCTL_MODE_SETCRTC</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>crtc</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>而所有与drm相关的定义都在<code>drivers/gpu/drm/drm_ioctl.c</code>中：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=n>DRM_IOCTL_DEF</span><span class=p>(</span><span class=n>DRM_IOCTL_MODE_SETCRTC</span><span class=p>,</span> <span class=n>drm_mode_setcrtc</span><span class=p>,</span> <span class=n>DRM_MASTER</span><span class=p>),</span>
+</code></pre></td></tr></table></div></div><p>可以知道它的处理函数是<code>drm_mode_setcrtc</code>。函数首先检查DRM设备的feature：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=n>drm_core_check_feature</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>DRIVER_MODESET</span><span class=p>))</span>
+                <span class=k>return</span> <span class=o>-</span><span class=n>EOPNOTSUPP</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>忽略到中间的处理可以看到：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=k>if</span> <span class=p>(</span><span class=n>drm_drv_uses_atomic_modeset</span><span class=p>(</span><span class=n>dev</span><span class=p>))</span>
+                <span class=n>ret</span> <span class=o>=</span> <span class=n>crtc</span><span class=o>-&gt;</span><span class=n>funcs</span><span class=o>-&gt;</span><span class=n>set_config</span><span class=p>(</span><span class=o>&amp;</span><span class=n>set</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>ctx</span><span class=p>);</span>
+        <span class=k>else</span>
+                <span class=n>ret</span> <span class=o>=</span> <span class=n>__drm_mode_set_config_internal</span><span class=p>(</span><span class=o>&amp;</span><span class=n>set</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>ctx</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>对于支持A-KMS的驱动来说，我们最终调用的就是<code>drm_crtc_funcs->set_config</code>回调函数，也就是<code>drm_atomic_helper_set_config</code>函数。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=kr>inline</span> <span class=kt>bool</span> <span class=nf>drm_drv_uses_atomic_modeset</span><span class=p>(</span><span class=k>struct</span> <span class=n>drm_device</span> <span class=o>*</span><span class=n>dev</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=k>return</span> <span class=n>drm_core_check_feature</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>DRIVER_ATOMIC</span><span class=p>)</span> <span class=o>||</span>
+                <span class=p>(</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>funcs</span> <span class=o>&amp;&amp;</span> <span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>.</span><span class=n>funcs</span><span class=o>-&gt;</span><span class=n>atomic</span>
+<span class=n>_commit</span> <span class=o>!=</span> <span class=nb>NULL</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>用户态A-KMS调用的入口函数<code>drmModeAtomicCommit</code>内部使用了不同的IOCTL调用：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>        <span class=n>ret</span> <span class=o>=</span> <span class=n>DRM_IOCTL</span><span class=p>(</span><span class=n>fd</span><span class=p>,</span> <span class=n>DRM_IOCTL_MODE_ATOMIC</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>atomic</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>对应到内核态：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=n>DRM_IOCTL_DEF</span><span class=p>(</span><span class=n>DRM_IOCTL_MODE_ATOMIC</span><span class=p>,</span> <span class=n>drm_mode_atomic_ioctl</span><span class=p>,</span> <span class=n>DRM_MASTER</span><span class=p>),</span>
+</code></pre></td></tr></table></div></div><p>该函数就是A-KMS在内核对应的处理函数，主要进行如下的操作：</p><ol><li>检查DRM设备是否设置<code>DRIVER_ATOMIC</code>标志，没有设置报错退出</li><li>检查用户态是否使能了A-KMS相关的API，没有使能报错退出</li><li>处理用户态传入的flags如PAGE_FLIP_ASYNC，ATOMIC_TEST_ONLY，PAGE_FLIP_EVENT等</li><li>申请一个新的atomic_mode_state，将用户态传入的property拷贝并设置到新的state上</li><li>最后根据flags中是否允许阻塞调用<code>drm_atomic_commit</code>或者<code>drm_atomic_nonblocking_commit</code>函数</li></ol><h2 id=state对象>State对象</h2><p>state是什么？这里的state是DRM框架用来追踪显示pipeline各个组件状态的状态集合。一个DRM显示pipeline的整体状态由<code>struct drm_atomic_state</code>表示：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>drm_atomic_state</span> <span class=p>{</span>
+  <span class=k>struct</span> <span class=n>kref</span> <span class=n>ref</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>drm_device</span> <span class=o>*</span><span class=n>dev</span><span class=p>;</span>
+  <span class=kt>bool</span> <span class=nl>allow_modeset</span> <span class=p>:</span> <span class=mi>1</span><span class=p>;</span>
+  <span class=kt>bool</span> <span class=nl>legacy_cursor_update</span> <span class=p>:</span> <span class=mi>1</span><span class=p>;</span>
+  <span class=kt>bool</span> <span class=nl>async_update</span> <span class=p>:</span> <span class=mi>1</span><span class=p>;</span>
+  <span class=kt>bool</span> <span class=nl>duplicated</span> <span class=p>:</span> <span class=mi>1</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>__drm_planes_state</span> <span class=o>*</span><span class=n>planes</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>__drm_crtcs_state</span> <span class=o>*</span><span class=n>crtcs</span><span class=p>;</span>
+  <span class=kt>int</span> <span class=n>num_connector</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>__drm_connnectors_state</span> <span class=o>*</span><span class=n>connectors</span><span class=p>;</span>
+  <span class=kt>int</span> <span class=n>num_private_objs</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>__drm_private_objs_state</span> <span class=o>*</span><span class=n>private_objs</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>drm_modeset_acquire_ctx</span> <span class=o>*</span><span class=n>acquire_ctx</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>drm_crtc_commit</span> <span class=o>*</span><span class=n>fake_commit</span><span class=p>;</span>
+  <span class=k>struct</span> <span class=n>work_struct</span> <span class=n>commit_work</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>可以看到他由每个独立的组件（即drm object）的状态对象组成。</p><h3 id=state的创建>State的创建</h3><p><code>drm_atomic_state</code>的创建由<code>drm_atomic_state_alloc</code>实现。函数中可以看到，<code>drm_mode_config_funcs</code>中提供了名为<code>atomic_state_alloc</code>的hook，允许我们自己实现state对象的创建。在默认情况下，函数会调用简单分配内存，然后使用<code>drm_atomic_state_init</code>进行初始化。初始化函数仅仅是简单分配分配<code>drm_atomic_state</code>中几个指针指向的内存区域。</p><p>对于各个drm object对应的state，其创建操作由其对应的<code>drm_{object}_funcs->atomic_duplicate_state</code>实现，在驱动程序没有扩展<code>drm_atomic_state</code>的情况下，这个回调函数一般填写为<code>drm_atomic_helper_{object}_duplicate_state</code>。而在commit过程中，是由<code>drm_atomic_get_{object}_state</code>函数触发这个创建操作的。该函数触发复制state操作后，还会将复制后的state及原本的state填入<code>drm_atomic_state</code>中对应的<code>__drm_{object}_state</code>中。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>__drm_</span><span class=p>{</span><span class=n>object</span><span class=p>}</span><span class=n>_state</span> <span class=p>{</span>
+        <span class=k>struct</span> <span class=n>drm_</span><span class=p>{</span><span class=n>object</span><span class=p>}</span> <span class=o>*</span><span class=n>ptr</span><span class=p>;</span>
+        <span class=k>struct</span> <span class=n>drm_</span><span class=p>{</span><span class=n>object</span><span class=p>}</span><span class=n>_state</span> <span class=o>*</span><span class=n>state</span><span class=p>,</span> <span class=o>*</span><span class=n>old_state</span><span class=p>,</span> <span class=o>*</span><span class=n>new_state</span><span class=p>;</span>
+    
+        <span class=cm>/* extra fields may exist */</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>这里的<code>old_state</code>保存<code>drm_{object}</code>现有的state，而<code>state</code>及<code>new_state</code>就保存我们复制后的state。</p><p>最后描述一下commit时创建state的简单流程：</p><ul><li>drm_mode_atomic_ioctl函数中会将用户态传入的property更新依次调用drm_atomic_set_property写入前面创建的<code>drm_atomic_state</code></li><li>drm_atomic_set_property函数会根据传入object的类型调用对应的<code>drm_atomic_get_{object}_state</code>函数，得到对应于该object类型的<code>drm_{object}_state</code>。在这个调用中，如果<code>drm_atomic_mode</code>中对应的<code>__drm_{object}_state</code>不存在，则复制原有的state并填入其中</li><li>随后<code>drm_atomic_set_property</code>会调用<code>drm_atomic_{object}_set_property</code>将属性更新写入到新的state当中</li><li>最后drm_mode_atomic_ioctl调用对应函数（<code>drm_atomic_commit</code>及其非阻塞版本）进行commit操作（该操作前提是没有设置TEST_ONLY的标志）</li></ul><h3 id=state更新>state更新</h3><p>state更新由<code>drm_atomic_{object}_set_property</code>函数实现。目前我们看到的state更新是作为一个整体出现的，即通过用户态的commit操作触发。事实上DRM还支持partial update，支持单独对某个object进行更新操作，后面会分析清楚。</p><h3 id=state的commit>state的commit</h3><p>上面看到真正的commit操作由<code>drm_atomic_commit</code>函数实现。该函数的实现也比较简单：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>int</span> <span class=nf>drm_atomic_commit</span><span class=p>(</span><span class=k>struct</span> <span class=n>drm_atomic_state</span> <span class=o>*</span><span class=n>state</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=k>struct</span> <span class=n>drm_mode_config</span> <span class=o>*</span><span class=n>config</span> <span class=o>=</span> <span class=o>&amp;</span><span class=n>state</span><span class=o>-&gt;</span><span class=n>dev</span><span class=o>-&gt;</span><span class=n>mode_config</span><span class=p>;</span>
+        <span class=kt>int</span> <span class=n>ret</span><span class=p>;</span>
+
+        <span class=n>ret</span> <span class=o>=</span> <span class=n>drm_atomic_check_only</span><span class=p>(</span><span class=n>state</span><span class=p>);</span>
+        <span class=k>if</span> <span class=p>(</span><span class=n>ret</span><span class=p>)</span>
+                <span class=k>return</span> <span class=n>ret</span><span class=p>;</span>
+
+        <span class=n>DRM_DEBUG_ATOMIC</span><span class=p>(</span><span class=s>&#34;committing %p</span><span class=se>\n</span><span class=s>&#34;</span><span class=p>,</span> <span class=n>state</span><span class=p>);</span>
+
+        <span class=k>return</span> <span class=n>config</span><span class=o>-&gt;</span><span class=n>funcs</span><span class=o>-&gt;</span><span class=n>atomic_commit</span><span class=p>(</span><span class=n>state</span><span class=o>-&gt;</span><span class=n>dev</span><span class=p>,</span> <span class=n>state</span><span class=p>,</span> <span class=nb>false</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>主要分为检查state合法性和调用<code>drm_mode_config_funcs->atomic_commit</code>函数进行commit操作。默认情况下，atomic_commit回调函数的功能是由<code>drm_atomic_helper_commit</code>实现的。函数内部有两个code path：阻塞和非阻塞，我们主要讨论阻塞情况下的实现。在阻塞情况下，函数会直接调用<code>drm_mode_config_helpers->atomic_commit_tail</code>函数。A-KMS中实现了一个标准的helper：<code>drm_atomic_helper_commit_tail</code>。而该helper又由更多的helper组成，因此想要真正理解A-KMS中commit操作的大致流程，需要分析这些helper实现的功能及调用的约定。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>void</span> <span class=nf>drm_atomic_helper_commit_tail</span><span class=p>(</span><span class=k>struct</span> <span class=n>drm_atomic_state</span> <span class=o>*</span><span class=n>old_state</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=k>struct</span> <span class=n>drm_device</span> <span class=o>*</span><span class=n>dev</span> <span class=o>=</span> <span class=n>old_state</span><span class=o>-&gt;</span><span class=n>dev</span><span class=p>;</span>
+
+        <span class=n>drm_atomic_helper_commit_modeset_disables</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>old_state</span><span class=p>);</span>
+
+        <span class=n>drm_atomic_helper_commit_planes</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>old_state</span><span class=p>,</span> <span class=mi>0</span><span class=p>);</span>
+
+        <span class=n>drm_atomic_helper_commit_modeset_enables</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>old_state</span><span class=p>);</span>
+
+        <span class=n>drm_atomic_helper_fake_vblank</span><span class=p>(</span><span class=n>old_state</span><span class=p>);</span>
+
+        <span class=n>drm_atomic_helper_commit_hw_done</span><span class=p>(</span><span class=n>old_state</span><span class=p>);</span>
+
+        <span class=n>drm_atomic_helper_wait_for_vblanks</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>old_state</span><span class=p>);</span>
+
+        <span class=n>drm_atomic_helper_cleanup_planes</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>old_state</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><h3 id=drm_atomic_helper_commit_modeset_disables>drm_atomic_helper_commit_modeset_disables</h3><p>该helper的作用是关闭所有的</p><p>TODO: check_only</p><h2 id=atomic-modeset-helper函数分析>Atomic Modeset Helper函数分析</h2><h3 id=架构>架构</h3><ol><li>去libdrm里找找看A-KMS的IOCTL接口与legacy到底有什么不同没有</li><li>假设有不同，那么IOCTL就是有两套接口。对于legacy接口，走原先legacy那套，其对应callback由Atomic Modeset Helper函数实现。对于A-KMS接口，其对应接口也由对应Helper实现。也就是说，Helper是框架中的一部分。</li><li>现在已经都是用新的A-KMS接口了，我认为legacy不用花大功夫去分析。</li></ol><p>整体架构为：</p><ul><li>原先legacy的callback保留，但是基本由A-KMS提供的公共helper实现</li><li>公共helper依赖与对应KMS object中保存的private_helper实现功能</li><li>驱动程序在注册KMS object时必须初始化legacy callback和private_helper，否则无法正常工作</li></ul><p>以CRTC举例，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=k>const</span> <span class=k>struct</span> <span class=n>drm_crtc_funcs</span> <span class=n>virtio_gpu_crtc_funcs</span> <span class=o>=</span> <span class=p>{</span>
+        <span class=p>.</span><span class=n>set_config</span>             <span class=o>=</span> <span class=n>drm_atomic_helper_set_config</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>destroy</span>                <span class=o>=</span> <span class=n>drm_crtc_cleanup</span><span class=p>,</span>
+
+        <span class=p>.</span><span class=n>page_flip</span>              <span class=o>=</span> <span class=n>drm_atomic_helper_page_flip</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>reset</span>                  <span class=o>=</span> <span class=n>drm_atomic_helper_crtc_reset</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_duplicate_state</span> <span class=o>=</span> <span class=n>drm_atomic_helper_crtc_duplicate_state</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_destroy_state</span>   <span class=o>=</span> <span class=n>drm_atomic_helper_crtc_destroy_state</span><span class=p>,</span>
+<span class=p>};</span>
+
+<span class=k>static</span> <span class=k>const</span> <span class=k>struct</span> <span class=n>drm_crtc_helper_funcs</span> <span class=n>virtio_gpu_crtc_helper_funcs</span> <span class=o>=</span> <span class=p>{</span>
+        <span class=p>.</span><span class=n>mode_set_nofb</span> <span class=o>=</span> <span class=n>virtio_gpu_crtc_mode_set_nofb</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_check</span>  <span class=o>=</span> <span class=n>virtio_gpu_crtc_atomic_check</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_flush</span>  <span class=o>=</span> <span class=n>virtio_gpu_crtc_atomic_flush</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_enable</span> <span class=o>=</span> <span class=n>virtio_gpu_crtc_atomic_enable</span><span class=p>,</span>
+        <span class=p>.</span><span class=n>atomic_disable</span> <span class=o>=</span> <span class=n>virtio_gpu_crtc_atomic_disable</span><span class=p>,</span>
+<span class=p>};</span>
+
+<span class=k>static</span> <span class=kt>int</span> <span class=nf>vgdev_output_init</span><span class=p>(</span><span class=k>struct</span> <span class=n>virtio_gpu_device</span> <span class=o>*</span><span class=n>vgdev</span><span class=p>,</span> <span class=kt>int</span> <span class=n>index</span><span class=p>)</span>
+<span class=p>{</span>
+        <span class=c1>// ......
+</span><span class=c1></span>        <span class=n>drm_crtc_init_with_planes</span><span class=p>(</span><span class=n>dev</span><span class=p>,</span> <span class=n>crtc</span><span class=p>,</span> <span class=n>primary</span><span class=p>,</span> <span class=n>cursor</span><span class=p>,</span>
+                                  <span class=o>&amp;</span><span class=n>virtio_gpu_crtc_funcs</span><span class=p>,</span> <span class=nb>NULL</span><span class=p>);</span>
+        <span class=n>drm_crtc_helper_add</span><span class=p>(</span><span class=n>crtc</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>virtio_gpu_crtc_helper_funcs</span><span class=p>);</span>
+        <span class=c1>// ......
+</span><span class=c1></span><span class=p>}</span>
+
+</code></pre></td></tr></table></div></div><h3 id=drm_atomic_helper_check>drm_atomic_helper_check</h3><p>从前面我们看到，A-KMS的主要操作主要分为两个：</p><ul><li>检查显示mode的合法性，确认硬件确实在该mode下正常工作</li><li>commit操作，将硬件完整的设置成对应的状态</li></ul><p>而<code>drm_atomic_helper_check</code>就是一般情况下<code>drm_mode_config_funcs->atomic_check</code>内的回调函数。其主要包含两个大的功能点：</p><ul><li>drm_atomic_helper_check_modeset</li><li>drm_atomic_helper_check_planes</li></ul><p>前者逐级调用CRTC下面组件的<code>atomic_check</code>回调函数，确认modeset是否合法。</p></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2021-03-26</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/kernel/>kernel</a>
+<a href=/crab2313.github.io/tags/drm/>drm</a></div><nav class=post-nav><a class=next href=crab2313.github.io/post/roadmap/><span class="next-text nav-default">路线指引</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>

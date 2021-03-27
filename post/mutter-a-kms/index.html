@@ -1,0 +1,278 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>Mutter实现分析：Atomic Modesetting - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="首先注意一个名字上的区分，一开始看代码的人可能会对命名有疑惑。在Jonas的设计中，整个KMS相关代码分为两个上下文：main和impl。m"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/mutter-a-kms/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="Mutter实现分析：Atomic Modesetting"><meta property="og:description" content="首先注意一个名字上的区分，一开始看代码的人可能会对命名有疑惑。在Jonas的设计中，整个KMS相关代码分为两个上下文：main和impl。m"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/mutter-a-kms/"><meta property="article:section" content="post"><meta property="article:published_time" content="2020-09-29T00:00:00+00:00"><meta property="article:modified_time" content="2020-09-29T00:00:00+00:00"><meta itemprop=name content="Mutter实现分析：Atomic Modesetting"><meta itemprop=description content="首先注意一个名字上的区分，一开始看代码的人可能会对命名有疑惑。在Jonas的设计中，整个KMS相关代码分为两个上下文：main和impl。m"><meta itemprop=datePublished content="2020-09-29T00:00:00+00:00"><meta itemprop=dateModified content="2020-09-29T00:00:00+00:00"><meta itemprop=wordCount content="6155"><meta itemprop=keywords content="gnome,mutter,drm,"><meta name=twitter:card content="summary"><meta name=twitter:title content="Mutter实现分析：Atomic Modesetting"><meta name=twitter:description content="首先注意一个名字上的区分，一开始看代码的人可能会对命名有疑惑。在Jonas的设计中，整个KMS相关代码分为两个上下文：main和impl。m"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>Mutter实现分析：Atomic Modesetting</h1><div class=post-meta><span class=post-time>2020-09-29</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><ul><li><a href=#metakms>MetaKms</a></li><li><a href=#metakmsupdate>MetaKmsUpdate</a></li><li><a href=#metakmsimpldevice>MetaKmsImplDevice</a></li><li><a href=#metakmsimpldevicesimple>MetaKmsImplDeviceSimple</a></li><li><a href=#metakmsimpldeviceatomic>MetaKmsImplDeviceAtomic</a></li><li><a href=#metakmsdevice>MetaKmsDevice</a></li><li><a href=#metacursorrenderer>MetaCursorRenderer</a></li><li><a href=#metadrmbuffer>MetaDrmBuffer</a></li><li><a href=#metarenderernative>MetaRendererNative</a></li><li><a href=#metarendererviewnative>MetaRendererViewNative</a></li></ul></li></ul></nav></div></div><div class=post-content><p>首先注意一个名字上的区分，一开始看代码的人可能会对命名有疑惑。在Jonas的设计中，整个KMS相关代码分为两个上下文：main和impl。main上下文就是mutter运行的上下文，即GMainLoop所在线程，而impl上下文虽然目前也运行在GMainLoop所在线程，但是从设计上就是KMS操作运行的上下文，后期可能迁移到独立线程上。因此，所有命名为Impl的类都是注册在<code>Impl</code>上下文的。</p><h2 id=metakms>MetaKms</h2><p>该对象为简单容器，是Jonas为了实现transactional modesetting对KMS进行的抽象。transactional KMS最终的目的有两个：</p><ul><li>使mutter可以利用Atomic Modesetting API，更加充分高效的利用硬件特性，消除modesetting的中间状态</li><li>使KMS API的调用主体可以为独立线程，本质上是允许KMS API的异步调用，即调用时</li></ul><p>首先明确其抽象的目标，即<code>transactional modesetting</code>，<code>transactional</code>这个词与数据库中的意义一致。即对于KMS设备进行的modesetting是原子性的，没有中间状态，要么成功要么失败，失败时不会进行任何状态更新。因此<code>MetaKms</code>使用<code>MetaKmsUpdate</code>抽象一个<code>transaction</code>。这套抽象目前使用普通的KMS API实现，但是只要接口移植完毕，那么即可直接调用Atomic KMS实现对应的操作。因此<code>MetaKms</code>作为容器也有选择后端实现的功能，但是当前的实现都为普通KMS。</p><p>创建<code>MetaKms</code>对象时，需要传入一个<code>MetaBackend</code>，<code>meta_kms_new</code>函数会自行创建一个<code>MetaKmsImpl</code>对象：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>  <span class=n>kms</span> <span class=o>=</span> <span class=n>g_object_new</span> <span class=p>(</span><span class=n>META_TYPE_KMS</span><span class=p>,</span> <span class=nb>NULL</span><span class=p>);</span>
+  <span class=n>kms</span><span class=o>-&gt;</span><span class=n>backend</span> <span class=o>=</span> <span class=n>backend</span><span class=p>;</span>
+  <span class=n>kms</span><span class=o>-&gt;</span><span class=n>impl</span> <span class=o>=</span> <span class=n>META_KMS_IMPL</span> <span class=p>(</span><span class=n>meta_kms_impl_simple_new</span> <span class=p>(</span><span class=n>kms</span><span class=p>,</span> <span class=n>error</span><span class=p>))</span>
+</code></pre></td></tr></table></div></div><p>随后会从后端中取出<code>MetaUdev</code>对象，然后注册两个信号的处理函数，可以看出这是为了处理GPU热插拔事件：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>  <span class=n>kms</span><span class=o>-&gt;</span><span class=n>hotplug_handler_id</span> <span class=o>=</span>
+    <span class=n>g_signal_connect</span> <span class=p>(</span><span class=n>udev</span><span class=p>,</span> <span class=s>&#34;hotplug&#34;</span><span class=p>,</span> <span class=n>G_CALLBACK</span> <span class=p>(</span><span class=n>on_udev_hotplug</span><span class=p>),</span> <span class=n>kms</span><span class=p>);</span>
+  <span class=n>kms</span><span class=o>-&gt;</span><span class=n>removed_handler_id</span> <span class=o>=</span>
+    <span class=n>g_signal_connect</span> <span class=p>(</span><span class=n>udev</span><span class=p>,</span> <span class=s>&#34;device-removed&#34;</span><span class=p>,</span>
+                      <span class=n>G_CALLBACK</span> <span class=p>(</span><span class=n>on_udev_device_removed</span><span class=p>),</span> <span class=n>kms</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><h2 id=metakmsupdate>MetaKmsUpdate</h2><p>这个结构体是transactional KMS API设计的核心。其核心思想是：</p><ul><li>对显示控制器的操作（即modesetting）transaction化</li><li>每个<code>MetaKmsUpdate</code>即代表一个transaction，操作时将所有操作缓存到<code>MetaKmsUpdate</code>中</li><li>只有commit操作时，原先cache的操作才会真正应用到显示控制器中</li></ul><p>因此，<code>MetaKms</code>会保存一个当前的<code>MetaKmsUpdate</code>，所有需要进行的KMS操作都需要缓存到其中，然后在合适的时机进行commit。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>_MetaKmsUpdate</span>
+<span class=p>{</span>
+  <span class=n>MetaKmsDevice</span> <span class=o>*</span><span class=n>device</span><span class=p>;</span>
+
+  <span class=n>gboolean</span> <span class=n>is_sealed</span><span class=p>;</span>
+  <span class=n>uint64_t</span> <span class=n>sequence_number</span><span class=p>;</span>
+
+  <span class=n>MetaPowerSave</span> <span class=n>power_save</span><span class=p>;</span>
+  <span class=n>GList</span> <span class=o>*</span><span class=n>mode_sets</span><span class=p>;</span>
+  <span class=n>GList</span> <span class=o>*</span><span class=n>plane_assignments</span><span class=p>;</span>
+  <span class=n>GList</span> <span class=o>*</span><span class=n>connector_updates</span><span class=p>;</span>
+  <span class=n>GList</span> <span class=o>*</span><span class=n>crtc_gammas</span><span class=p>;</span>
+
+  <span class=n>MetaKmsCustomPageFlipFunc</span> <span class=n>custom_page_flip_func</span><span class=p>;</span>
+  <span class=n>gpointer</span> <span class=n>custom_page_flip_user_data</span><span class=p>;</span>
+
+  <span class=n>GList</span> <span class=o>*</span><span class=n>page_flip_listeners</span><span class=p>;</span>
+  <span class=n>GList</span> <span class=o>*</span><span class=n>result_listeners</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>在明白上述原理后，这个对象的表示也就比较容易理解了。首先<code>is_sealed</code>表示这个对象是否已经被封装好，即是否能够继续向其中添加操作。随后紧跟的是多个List，分别可以保存特定的一类操作。</p><p><code>MetaKms</code>提供了多个接口，用于创建、获取，并commit一个<code>MetaKmsUpdate</code>：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=n>MetaKmsUpdate</span> <span class=o>*</span> <span class=nf>meta_kms_ensure_pending_update</span> <span class=p>(</span><span class=n>MetaKms</span> <span class=o>*</span><span class=n>kms</span><span class=p>);</span>
+<span class=n>MetaKmsUpdate</span> <span class=o>*</span> <span class=nf>meta_kms_get_pending_update</span> <span class=p>(</span><span class=n>MetaKms</span> <span class=o>*</span><span class=n>kms</span><span class=p>);</span>
+<span class=n>MetaKmsFeedback</span> <span class=o>*</span> <span class=n>meta_kms_post_pending_update_sync</span> <span class=p>(</span><span class=n>MetaKms</span> <span class=o>*</span><span class=n>kms</span><span class=p>)</span>
+</code></pre></td></tr></table></div></div><p>因此，<code>MetaKmsImpl</code>的实现的功能就显而易见了，即负责真正执行一个<code>MetaKmsUpdate</code>。</p><h2 id=metakmsimpldevice>MetaKmsImplDevice</h2><p>为了实现<code>Atomic Modesetting</code>，首先需要抽象一个<code>KMS</code>支持的操作。<code>MetaKmsImplDevice</code>抽象出了这个接口：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>_MetaKmsImplDeviceClass</span>
+<span class=p>{</span>
+  <span class=n>GObjectClass</span> <span class=n>parent_class</span><span class=p>;</span>
+
+  <span class=kt>void</span> <span class=p>(</span><span class=o>*</span> <span class=n>setup_drm_event_context</span><span class=p>)</span> <span class=p>(</span><span class=n>MetaKmsImplDevice</span> <span class=o>*</span><span class=n>impl</span><span class=p>,</span>
+                                    <span class=n>drmEventContext</span>   <span class=o>*</span><span class=n>drm_event_context</span><span class=p>);</span>
+  <span class=n>MetaKmsFeedback</span> <span class=o>*</span> <span class=p>(</span><span class=o>*</span> <span class=n>process_update</span><span class=p>)</span> <span class=p>(</span><span class=n>MetaKmsImplDevice</span> <span class=o>*</span><span class=n>impl</span><span class=p>,</span>
+                                        <span class=n>MetaKmsUpdate</span>     <span class=o>*</span><span class=n>update</span><span class=p>);</span>
+  <span class=kt>void</span> <span class=p>(</span><span class=o>*</span> <span class=n>handle_page_flip_callback</span><span class=p>)</span> <span class=p>(</span><span class=n>MetaKmsImplDevice</span>   <span class=o>*</span><span class=n>impl</span><span class=p>,</span>
+                                      <span class=n>MetaKmsPageFlipData</span> <span class=o>*</span><span class=n>page_flip_data</span><span class=p>);</span>
+  <span class=kt>void</span> <span class=p>(</span><span class=o>*</span> <span class=n>discard_pending_page_flips</span><span class=p>)</span> <span class=p>(</span><span class=n>MetaKmsImplDevice</span> <span class=o>*</span><span class=n>impl</span><span class=p>);</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>并由<code>MetaKmsImplDeviceSimple</code>和<code>MetaKmsImplDeviceAtomic</code>实现。显然<code>handle_page_flip_callback</code>和<code>discard_pending_page_flips</code>与<code>process</code>被直接当作虚函数导出。另一个非常重要的操作是<code>dispatch</code>，实现如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>  <span class=n>drm_event_context</span> <span class=o>=</span> <span class=p>(</span><span class=n>drmEventContext</span><span class=p>)</span> <span class=p>{</span> <span class=mi>0</span> <span class=p>};</span>
+  <span class=n>klass</span><span class=o>-&gt;</span><span class=n>setup_drm_event_context</span> <span class=p>(</span><span class=n>impl_device</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>drm_event_context</span><span class=p>);</span>
+
+  <span class=k>while</span> <span class=p>(</span><span class=n>TRUE</span><span class=p>)</span>
+    <span class=p>{</span>
+      <span class=k>if</span> <span class=p>(</span><span class=n>drmHandleEvent</span> <span class=p>(</span><span class=n>priv</span><span class=o>-&gt;</span><span class=n>fd</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>drm_event_context</span><span class=p>)</span> <span class=o>!=</span> <span class=mi>0</span><span class=p>)</span>
+        <span class=p>{</span>
+</code></pre></td></tr></table></div></div><p>可以看出，首先使用<code>setup_drm_event_context</code>回调函数设置好<code>drmEventContext</code>，本质上就是<code>page flip</code>的处理函数，在随后的<code>drmHandleEvent</code>中，如果出现<code>PageFlip</code>事件，则会调用<code>MetaKmsImplDeviceXXX</code>中设置好的<code>Page flip</code>处理函数进行处理。</p><p>除此之外比较有意思的是这个类保存了所有的DRM设备属性，也就是<code>connector</code>、<code>CRTC</code>等KMS接口导出的对象：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>typedef</span> <span class=k>struct</span> <span class=n>_MetaKmsImplDevicePrivate</span>
+<span class=p>{</span>
+  <span class=n>MetaKmsDevice</span> <span class=o>*</span><span class=n>device</span><span class=p>;</span>
+  <span class=n>MetaKmsImpl</span> <span class=o>*</span><span class=n>impl</span><span class=p>;</span>
+
+  <span class=kt>int</span> <span class=n>fd</span><span class=p>;</span>
+  <span class=n>GSource</span> <span class=o>*</span><span class=n>fd_source</span><span class=p>;</span>
+  <span class=kt>char</span> <span class=o>*</span><span class=n>path</span><span class=p>;</span>
+
+  <span class=n>GList</span> <span class=o>*</span><span class=n>crtcs</span><span class=p>;</span>
+  <span class=n>GList</span> <span class=o>*</span><span class=n>connectors</span><span class=p>;</span>
+  <span class=n>GList</span> <span class=o>*</span><span class=n>planes</span><span class=p>;</span>
+
+  <span class=n>MetaKmsDeviceCaps</span> <span class=n>caps</span><span class=p>;</span>
+
+  <span class=n>GList</span> <span class=o>*</span><span class=n>fallback_modes</span><span class=p>;</span>
+<span class=p>}</span> <span class=n>MetaKmsImplDevicePrivate</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>可以在该类型的初始化函数中得到对应的初始化方式，且该类型的初始化函数中还隐藏了比较重要的信息：一个<code>GSource</code>，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>  <span class=n>priv</span><span class=o>-&gt;</span><span class=n>fd_source</span> <span class=o>=</span>
+    <span class=n>meta_kms_register_fd_in_impl</span> <span class=p>(</span><span class=n>meta_kms_impl_get_kms</span> <span class=p>(</span><span class=n>priv</span><span class=o>-&gt;</span><span class=n>impl</span><span class=p>),</span> <span class=n>priv</span><span class=o>-&gt;</span><span class=n>fd</span><span class=p>,</span>
+                                  <span class=n>kms_event_dispatch_in_impl</span><span class=p>,</span>
+                                  <span class=n>impl_device</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>本质上是在GMainContext中注册了一个<code>GSource</code>，以DRM的文件描述符的可读状态为事件源，以传入的<code>kms_event_dispatch_in_impl</code>函数作为<code>dispatch</code>回调函数。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=n>gpointer</span>
+<span class=nf>kms_event_dispatch_in_impl</span> <span class=p>(</span><span class=n>MetaKmsImpl</span>  <span class=o>*</span><span class=n>impl</span><span class=p>,</span>
+                            <span class=n>gpointer</span>      <span class=n>user_data</span><span class=p>,</span>
+                            <span class=n>GError</span>      <span class=o>**</span><span class=n>error</span><span class=p>)</span>
+<span class=p>{</span>
+  <span class=n>MetaKmsImplDevice</span> <span class=o>*</span><span class=n>impl_device</span> <span class=o>=</span> <span class=n>user_data</span><span class=p>;</span>
+  <span class=n>gboolean</span> <span class=n>ret</span><span class=p>;</span>
+
+  <span class=n>ret</span> <span class=o>=</span> <span class=n>meta_kms_impl_device_dispatch</span> <span class=p>(</span><span class=n>impl_device</span><span class=p>,</span> <span class=n>error</span><span class=p>);</span>
+  <span class=k>return</span> <span class=n>GINT_TO_POINTER</span> <span class=p>(</span><span class=n>ret</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>而在该函数中调用了<code>meta_kms_impl_device_dispatch</code>函数，除此之外别无它地。上述即为<code>Page Flip</code>的处理机制，从这里看，<code>MetaKmsImplDevice</code>一旦创建，即会注册<code>Page Flip</code>的处理函数，并进行处理。</p><h2 id=metakmsimpldevicesimple>MetaKmsImplDeviceSimple</h2><p>~~这个是目前mutter唯一实现的<code>MetaKmsImpl</code>，~~实质上是用普通KMS（即非atomic）操作实现transacational KMS的接口。可以预见，后续mutter项目会使用Atomic KMS接口实现一个<code>MetaKmsImplAtomic</code>，实现事实意义上的atomic KMS支持。</p><p>这里分析<code>MetaKmsImplSimple</code>几个比较复杂的操作。首先明确入口为<code>meta_kms_impl_simple_process_update</code>函数，其内部连续处理缓存在<code>MetaKmsUpdate</code>中的KMS操作。简单的操作只是简单的wrap一个<code>drmMode*</code>函数，可以略过，直接分析最复杂的PageFlip处理。先看其缓存在<code>MetaKmsUpdate</code>中的形式：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>typedef</span> <span class=k>struct</span> <span class=n>_MetaKmsPageFlip</span>
+<span class=p>{</span>
+  <span class=n>MetaKmsCrtc</span> <span class=o>*</span><span class=n>crtc</span><span class=p>;</span>
+  <span class=k>const</span> <span class=n>MetaKmsPageFlipFeedback</span> <span class=o>*</span><span class=n>feedback</span><span class=p>;</span>
+  <span class=n>gpointer</span> <span class=n>user_data</span><span class=p>;</span>
+  <span class=n>MetaKmsCustomPageFlipFunc</span> <span class=n>custom_page_flip_func</span><span class=p>;</span>
+  <span class=n>gpointer</span> <span class=n>custom_page_flip_user_data</span><span class=p>;</span>
+<span class=p>}</span> <span class=n>MetaKmsPageFlip</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>先理解<code>drmModePageFlip</code>函数，该函数与<code>drmModeSetCrtc</code>函数非常相似，只不过其只有在VBlank事件来了时才生效，也就是告诉DRM当VBlank事件到来时，更新framebuffer。我们可以将函数的flags参数传入<code>DRM_MODE_PAGE_FLIP_EVENT</code>，此时每当PageFlip发生时，都会产生一个PageFlip事件。事件通过drm文件描述符变为可读告知用户态，且我们可以使用<code>drmHandleEvent</code>处理事件。注意<code>drmModePageFlip</code>的最后一个参数为<code>user_data</code>，一个用户态指针，每当PageFlip事件生成时，对应的指针就会跟着传入<code>drmHandleEvent</code>函数，所以我们可以通过该指针辨别PageFlip。</p><p>接下来看<code>process_page_flip</code>函数，该函数是PageFlip处理的核心。首先可以知道<code>MetaKmsPageFlip</code>中提供了一个让调用方自己写PageFlip处理函数的机制，即对应于<code>custom_page_flip_func</code>函数指针和其对应的数据。当他们存在时，就通过它们进行PageFlip的处理，反之则使用标准的处理流程，即调用<code>drmModePageFlip</code>函数：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>      <span class=n>ret</span> <span class=o>=</span> <span class=n>drmModePageFlip</span> <span class=p>(</span><span class=n>fd</span><span class=p>,</span>
+                             <span class=n>meta_kms_crtc_get_id</span> <span class=p>(</span><span class=n>crtc</span><span class=p>),</span>
+                             <span class=n>plane_assignment</span><span class=o>-&gt;</span><span class=n>fb_id</span><span class=p>,</span>
+                             <span class=n>DRM_MODE_PAGE_FLIP_EVENT</span><span class=p>,</span>
+                             <span class=n>meta_kms_page_flip_data_ref</span> <span class=p>(</span><span class=n>page_flip_data</span><span class=p>));</span>
+</code></pre></td></tr></table></div></div><p><code>page_flip_data</code>究竟记录了什么，目前不需要知道，到时候在分析mutter frame调度器的时候进行分析，目前只看到：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>  <span class=n>page_flip_data</span> <span class=o>=</span> <span class=n>meta_kms_page_flip_data_new</span> <span class=p>(</span><span class=n>impl</span><span class=p>,</span>
+                                                <span class=n>crtc</span><span class=p>,</span>
+                                                <span class=n>page_flip</span><span class=o>-&gt;</span><span class=n>feedback</span><span class=p>,</span>
+                                                <span class=n>page_flip</span><span class=o>-&gt;</span><span class=n>user_data</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>注意<code>drmModePageFlip</code>函数在一个VBlank期间只能调用一次，在已经调用过一次的情况下再继续调用的话会返回<code>-EBUSY</code>。可以看到<code>process_page_flip</code>函数在该情况下实现了一个缓存机制，将返回<code>-EBUSY</code>的调用重新调度到下一次VBlank。这里只需要看到它是将多余的PageFlip计算出一个时间间隔，并缓存到了一张表内，其余细节在分析frame调度时再分析。</p><h2 id=metakmsimpldeviceatomic>MetaKmsImplDeviceAtomic</h2><p>半年之后jonas终于把<code>Atomic Modesetting</code>的支持做完了，不过熟悉GNOME的人都应该懂这个特性起码review半年以上，也就是mutter 40都不一定可以合入。前面提到<code>Atomic Modesetting</code>的支持就差最后一个<code>Buffer</code>，以前我对于DRM的理解没有那么深刻，结果误解了这个<code>Buffer</code>的含义。这个<code>Buffer</code>实质上是指<code>Buffer</code>更新，即设置CRTC的scanout。因此，需要定义一个<code>PlaneAssignment</code>用于抽象这个操作。</p><p><code>Atomic Modesetting</code>的实质是使用<code>Atomic API</code>替换掉原有的legacy接口，需要重新实现一个<code>MetaKmsImplDevice</code>，也就是<code>MetaKmsImplDeviceAtomic</code>。该函数的核心操作就是<code>process_update</code>，在进行这个操作时，首先自己是否已经初始化，如果没有初始化，则进行以下操作：</p><ul><li>MetaKmsDevice里管理的所有connector的<code>CRTC_ID</code>属性设置为0</li><li>MetaKmsDevice里管理的所有plane的<code>CRTC_ID</code>与<code>FB_ID</code>设置为0</li></ul><p>随后则进行update操作，如下：</p><ul><li>依次处理<code>MetaKmsUpdate</code>中保存的信息，本质上就是更改对应Object里的属性</li><li>然后commit</li></ul><h2 id=metakmsdevice>MetaKmsDevice</h2><p><del>没意思。</del></p><p>有意思了，原先没有看到PageFlip事件的处理在<code>MetaKmsDevice</code>里，单纯以为其是drm设备文件描述符的容器。漏掉了最重要的函数<code>meta_kms_device_dispatch_sync</code>。先分析通用实现，然后再看<code>MetaKmsImplDevice</code>。</p><p>可以看到函数首先调用<code>MetaKmsImpl</code>的<code>meta_kms_impl_dispatch_idle</code>函数，后续调用了<code>MetaKmsImplDevice</code>实现的<code>dispatch</code>函数，中间穿插了<code>meta_kms_flush_callback</code>的调用。</p><h2 id=metacursorrenderer>MetaCursorRenderer</h2><p>来看个比较独立也看起来比较简单的东西吧：鼠标光标绘制。首先看通用的抽象即<code>MetaCursorRender</code>。首先明确光标绘制的两种方式，硬件光标和软件光标。首先说软件光标，这个比较好理解，即直接在屏幕上进行光标的绘制，与绘制窗口无异。硬件光标则不同，目前的显示控制器一般都实现了cursor图层（plane），即屏幕的主图层和cursor图层是相互独立的，只有在scanout的时候才由硬件进行叠加操作。cursor图层一般支持绘制一块比较小的bitmap到屏幕上，而该bimtap可以在屏幕上快速移动。但是硬件实现的cursor图层是有局限性的，特定情况下并不能启用，所以mutter需要管理硬件cursor的启用。</p><p>事实上通过简单思考即抽象出Cursor管理需要向外提供的接口：</p><ul><li>光标（相对屏幕）位置的设置和获取</li><li>硬件光标的启用与停用管理</li><li>光标位图设置</li><li>光标更新（绘制）</li></ul><p>mutter使用<code>MetaCursorRender</code>抽象cursor的绘制器，而使用<code>MetaCursorSprite</code>描述光标图片（注意，这个可以是动画）。为了管理硬件cursor的启用条件，定义了<code>MetaHwCursorInhibitor</code>接口，实现了该接口的对象可以提供一个函数用于确定是否可以启用硬件cursor。</p><p>可以看到<code>MetaCursorRender</code>向外提供的接口如下：</p><ul><li>set_curosr/get_cursor，更换和获取`MetaCursorSprite（并绘制）</li><li>set_position/get_position，更该和获取光标位置（并绘制）</li><li>force_update，强制重新绘制光标</li><li>{is，add，remove}_hw_cursor_inhibitor，向其注册删除<code>MetaHwCursorInhibitor</code></li></ul><p>先来看一下绘制光标的抽象接口：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>  <span class=k>if</span> <span class=p>(</span><span class=n>cursor_sprite</span><span class=p>)</span>
+    <span class=n>meta_cursor_sprite_prepare_at</span> <span class=p>(</span><span class=n>cursor_sprite</span><span class=p>,</span>
+                                   <span class=p>(</span><span class=kt>int</span><span class=p>)</span> <span class=n>priv</span><span class=o>-&gt;</span><span class=n>current_x</span><span class=p>,</span>
+                                   <span class=p>(</span><span class=kt>int</span><span class=p>)</span> <span class=n>priv</span><span class=o>-&gt;</span><span class=n>current_y</span><span class=p>);</span>
+
+  <span class=n>handled_by_backend</span> <span class=o>=</span>
+    <span class=n>META_CURSOR_RENDERER_GET_CLASS</span> <span class=p>(</span><span class=n>renderer</span><span class=p>)</span><span class=o>-&gt;</span><span class=n>update_cursor</span> <span class=p>(</span><span class=n>renderer</span><span class=p>,</span>
+                                                              <span class=n>cursor_sprite</span><span class=p>);</span>
+  <span class=k>if</span> <span class=p>(</span><span class=n>handled_by_backend</span> <span class=o>!=</span> <span class=n>priv</span><span class=o>-&gt;</span><span class=n>handled_by_backend</span><span class=p>)</span>
+    <span class=p>{</span>
+      <span class=n>priv</span><span class=o>-&gt;</span><span class=n>handled_by_backend</span> <span class=o>=</span> <span class=n>handled_by_backend</span><span class=p>;</span>
+      <span class=n>should_redraw</span> <span class=o>=</span> <span class=n>TRUE</span><span class=p>;</span>
+    <span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>这是<code>meta_cursor_renderer_update_cursor</code>中的片段。其大致逻辑就是，如果子类实现的<code>update_cursor</code>函数没有处理光标绘制，则交由<code>MetaCursorRenderer</code>实现的软件绘制器进行光标绘制。</p><h2 id=metadrmbuffer>MetaDrmBuffer</h2><p>Buffer管理应该是transacational KMS最后一个还没有做的部分了。很明显一个<code>MetaDrmBuffer</code>对应一个DRM Buffer，且其只提供一个虚函数：<code>get_fb_id</code>。现在看到这个类有三个实现：</p><ul><li>DUMB，这个就是那个几乎所有DRM驱动都支持的DUMB Buffer，不支持GPU加速，不看</li><li>GBM，这个应该是本地GPU通过libgbm分配出来的Buffer</li><li>Import，这个是其他GPU通过prime接口导出的Buffer，这个也暂时不看</li></ul><p><code>MetaDrmBuffer</code>是一个抽象类，由于上面的<code>DUMB</code>和<code>Import</code>类型的Buffer都没有进一步分析的必要，所以这里主要分析<code>MetaDrmBufferGbm</code>。首先明确这个Buffer对应的是DRM中的Buffer概念，且是使用libgbm分配而出的Buffer，所以这一套API与EGL和DRM高度相关。<code>MetaDrmBufferGbm</code>提供了两个创建方法：</p><ul><li>new_lock_front。该方法对应EGL中的<code>lock front buffer</code>操作，本质是锁定一个gbm_surface中的一个后端Buffer然后将其返回供用户操作。一旦完成操作则需要将该Buffer返还gbm_surface并解除锁定。</li><li>new_take。直接将一个<code>gbm_bo</code>包装成一个<code>MetaDrmBufferGbm</code>。</li></ul><p>无论使用哪个方法进行创建，都需要使用<code>meta_gpu_kms_add_fb</code>将整个buffer注册到DRM中，并得到一个<code>framebuffer id</code>并保存起来。</p><h2 id=metarenderernative>MetaRendererNative</h2><p>原来一直没看懂这个东西存在的必要，现在明白了。<code>MetaRenderer</code>的功能是维护一个<code>MetaRendererView</code>列表，同时提供创建<code>CoglRenderer</code>的功能。为了理解它，首先明确整个<code>Mutter</code>中<code>ClutterStage</code>是只有一个的，也就是哪怕有多个显示器，整个Session中也是公用一个<code>ClutterStage</code>的。在<code>Clutter</code>将整个桌面渲染出来之后，需要将其进行拆分，并对应到所有的显示器中。对于Native后端来说，上述操作就是多个CRTC的scanout设置到同一个Buffer的不同区域中。真正负责将输出渲染(Render)到逻辑显示器上的就是<code>MetaRandererView</code>，而<code>MetaRenderer</code>则负责管理<code>MetaRenderer</code>上的显示器。</p><h2 id=metarendererviewnative>MetaRendererViewNative</h2><p><code>MetaRendererView</code>是<code>ClutterStageViewCogl</code>的子类，提供了有限的接口，大部分需要其子类实现:</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-C data-lang=C><span class=k>enum</span>
+<span class=p>{</span>
+  <span class=n>PROP_0</span><span class=p>,</span>
+
+  <span class=n>PROP_TRANSFORM</span><span class=p>,</span>
+  <span class=n>PROP_CRTC</span><span class=p>,</span>
+
+  <span class=n>PROP_LAST</span>
+<span class=p>};</span>
+
+<span class=k>static</span> <span class=n>GParamSpec</span> <span class=o>*</span><span class=n>obj_props</span><span class=p>[</span><span class=n>PROP_LAST</span><span class=p>];</span>
+
+<span class=k>struct</span> <span class=n>_MetaRendererView</span>
+<span class=p>{</span>
+  <span class=n>ClutterStageViewCogl</span> <span class=n>parent</span><span class=p>;</span>
+
+  <span class=n>MetaMonitorTransform</span> <span class=n>transform</span><span class=p>;</span>
+
+  <span class=n>MetaCrtc</span> <span class=o>*</span><span class=n>crtc</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>简单包含了两个属性：CRTC对应的ID以及显示器变换。</p><p>TODO: 涉及到COGL，以及ClutterStageView，后面再看</p></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2020-09-29</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/gnome/>gnome</a>
+<a href=/crab2313.github.io/tags/mutter/>mutter</a>
+<a href=/crab2313.github.io/tags/drm/>drm</a></div><nav class=post-nav><a class=prev href=crab2313.github.io/post/multicast/><i class="iconfont icon-left"></i>
+<span class="prev-text nav-default">Linux内核组播包接收流程分析</span>
+<span class="prev-text nav-mobile">上一篇</span></a>
+<a class=next href=crab2313.github.io/post/riscv-atomic-barrier-bitops/><span class="next-text nav-default">Linux内核在RISC-V架构下的内存屏障与原子操作</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>

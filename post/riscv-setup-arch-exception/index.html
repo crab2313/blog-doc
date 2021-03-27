@@ -1,0 +1,417 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>Linux内核在RISC-V架构下的setup_arch与异常处理 - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="在分析完Linux内核在RISC-V架构下的启动流程后，我们分析Linux下与RISC-V相关的架构相关实现。很明显，这类知识都是非常零散的"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/riscv-setup-arch-exception/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="Linux内核在RISC-V架构下的setup_arch与异常处理"><meta property="og:description" content="在分析完Linux内核在RISC-V架构下的启动流程后，我们分析Linux下与RISC-V相关的架构相关实现。很明显，这类知识都是非常零散的"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/riscv-setup-arch-exception/"><meta property="article:section" content="post"><meta property="article:published_time" content="2020-08-05T00:00:00+00:00"><meta property="article:modified_time" content="2020-08-05T00:00:00+00:00"><meta itemprop=name content="Linux内核在RISC-V架构下的setup_arch与异常处理"><meta itemprop=description content="在分析完Linux内核在RISC-V架构下的启动流程后，我们分析Linux下与RISC-V相关的架构相关实现。很明显，这类知识都是非常零散的"><meta itemprop=datePublished content="2020-08-05T00:00:00+00:00"><meta itemprop=dateModified content="2020-08-05T00:00:00+00:00"><meta itemprop=wordCount content="6771"><meta itemprop=keywords content="kernel,risc-v,"><meta name=twitter:card content="summary"><meta name=twitter:title content="Linux内核在RISC-V架构下的setup_arch与异常处理"><meta name=twitter:description content="在分析完Linux内核在RISC-V架构下的启动流程后，我们分析Linux下与RISC-V相关的架构相关实现。很明显，这类知识都是非常零散的"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>Linux内核在RISC-V架构下的setup_arch与异常处理</h1><div class=post-meta><span class=post-time>2020-08-05</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><ul><li><a href=#setup_arch>setup_arch</a><ul><li><a href=#设备树与参数解析>设备树与参数解析</a></li><li><a href=#memblock初始化>memblock初始化</a></li><li><a href=#paging_init>paging_init</a></li><li><a href=#unflatten_device_tree>unflatten_device_tree</a></li><li><a href=#sbi_init--setup_smp--riscv_fill_hwcap>sbi_init && setup_smp && riscv_fill_hwcap</a></li></ul></li><li><a href=#进程管理>进程管理</a></li><li><a href=#中断异常与系统调用>中断、异常与系统调用</a><ul><li><a href=#中断>中断</a></li><li><a href=#系统调用>系统调用</a></li><li><a href=#其他异常>其他异常</a></li></ul></li></ul></li></ul></nav></div></div><div class=post-content><p>在分析完Linux内核在RISC-V架构下的启动流程后，我们分析Linux下与RISC-V相关的架构相关实现。很明显，这类知识都是非常零散的，这里使用的入手点为<code>setup_arch</code>的实现。</p><p>在开始分析之前，一定要对Linux内核的架构相关代码有一定的认识，这里做一个原理性的说明。Linux内核的codebase可以简单分成两个部分：架构相关部分和架构无关部分。为了支持多个架构，且最大限度地公用代码，又保留架构相关实现的灵活性，Linux内核的实现经过了精细的设计。内核底层对一些架构相关的操作进行了抽象，向内核通用代码提供了公共的接口。每一个内核支持的架构都对应一个<code>arch/</code>下的文件夹，里面存放着本架构相关的代码。</p><p>接下来简要介绍一下内核实现多架构支持的手段：</p><ul><li>条件编译。这个方法主要用在一些极端特殊场合，多用于驱动对特定平台的区别操作。内核提供了一些宏，用于检测当前架构。</li><li>weak函数。这个方法利用了ELF object文件中的<code>weak symbol</code>，具有这个属性的<code>symbol</code>在链接时，如果链接器可以在所有进行链接的object文件中找到同名<code>symbol</code>，则会用这个<code>symbol</code>把<code>weak symbol</code>顶替掉。内核使用<code>__weak</code>（本质就是一个GCC扩展）标记weak函数。内核可以对所有架构实现一个通用的weak函数，如果有架构需要一个自己的版本，则可以直接定义，并将其顶替。</li><li>平台相关函数。这类函数为强平台相关，内核一般定义一个共同函数原型及函数语意，由各架构自行实现该函数。这里其实也包括一部分宏。</li></ul><h2 id=setup_arch>setup_arch</h2><p>阅读过任何一本内核书的人对这个函数一定不陌生。这个函数主要做架构相关的初始化操作。函数首先设置<code>init_mm</code>上的四个变量，前面提到过，<code>_stext</code>等变量是通过链接脚本放到内核二进制文件特定地址的，通过他们可以获取内核内存布局的范围。注意这里已经开启MMU了，且RISC-V内核使用的是PC相对寻址，因此这时获取的是对应的虚拟地址。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>init_mm</span><span class=p>.</span><span class=n>start_code</span> <span class=o>=</span> <span class=p>(</span><span class=kt>unsigned</span> <span class=kt>long</span><span class=p>)</span> <span class=n>_stext</span><span class=p>;</span>
+	<span class=n>init_mm</span><span class=p>.</span><span class=n>end_code</span>   <span class=o>=</span> <span class=p>(</span><span class=kt>unsigned</span> <span class=kt>long</span><span class=p>)</span> <span class=n>_etext</span><span class=p>;</span>
+	<span class=n>init_mm</span><span class=p>.</span><span class=n>end_data</span>   <span class=o>=</span> <span class=p>(</span><span class=kt>unsigned</span> <span class=kt>long</span><span class=p>)</span> <span class=n>_edata</span><span class=p>;</span>
+	<span class=n>init_mm</span><span class=p>.</span><span class=n>brk</span>        <span class=o>=</span> <span class=p>(</span><span class=kt>unsigned</span> <span class=kt>long</span><span class=p>)</span> <span class=n>_end</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><h3 id=设备树与参数解析>设备树与参数解析</h3><p>在这个阶段，设备树并没有完全进行解析，内核只需要提取一小部分重要信息即可。回顾原先的分析，<code>_start_kernel</code>在调用<code>start_kernel</code>前调用了<code>parse_dtb</code>函数，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>void</span> <span class=n>__init</span> <span class=nf>parse_dtb</span><span class=p>(</span><span class=kt>void</span><span class=p>)</span>
+<span class=p>{</span>
+	<span class=k>if</span> <span class=p>(</span><span class=n>early_init_dt_scan</span><span class=p>(</span><span class=n>dtb_early_va</span><span class=p>))</span>
+		<span class=k>return</span><span class=p>;</span>
+
+	<span class=n>pr_err</span><span class=p>(</span><span class=s>&#34;No DTB passed to the kernel</span><span class=se>\n</span><span class=s>&#34;</span><span class=p>);</span>
+<span class=cp>#ifdef CONFIG_CMDLINE_FORCE
+</span><span class=cp></span>	<span class=n>strlcpy</span><span class=p>(</span><span class=n>boot_command_line</span><span class=p>,</span> <span class=n>CONFIG_CMDLINE</span><span class=p>,</span> <span class=n>COMMAND_LINE_SIZE</span><span class=p>);</span>
+	<span class=n>pr_info</span><span class=p>(</span><span class=s>&#34;Forcing kernel command line to: %s</span><span class=se>\n</span><span class=s>&#34;</span><span class=p>,</span> <span class=n>boot_command_line</span><span class=p>);</span>
+<span class=cp>#endif
+</span><span class=cp></span><span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>这个函数简单调用了设备树（OF）模块的通用函数<code>early_init_dt_scan</code>，从设备树中解析并设置一些基本的信息。这里简单分析一下获取了哪些信息。在简单检查设备树的合法性之后，可以看到进行了如下操作：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=cm>/* Retrieve various information from the /chosen node */</span>
+	<span class=n>rc</span> <span class=o>=</span> <span class=n>of_scan_flat_dt</span><span class=p>(</span><span class=n>early_init_dt_scan_chosen</span><span class=p>,</span> <span class=n>boot_command_line</span><span class=p>);</span>
+	<span class=k>if</span> <span class=p>(</span><span class=o>!</span><span class=n>rc</span><span class=p>)</span>
+		<span class=n>pr_warn</span><span class=p>(</span><span class=s>&#34;No chosen node found, continuing without</span><span class=se>\n</span><span class=s>&#34;</span><span class=p>);</span>
+
+	<span class=cm>/* Initialize {size,address}-cells info */</span>
+	<span class=n>of_scan_flat_dt</span><span class=p>(</span><span class=n>early_init_dt_scan_root</span><span class=p>,</span> <span class=nb>NULL</span><span class=p>);</span>
+
+	<span class=cm>/* Setup memory, calling early_init_dt_add_memory_arch */</span>
+	<span class=n>of_scan_flat_dt</span><span class=p>(</span><span class=n>early_init_dt_scan_memory</span><span class=p>,</span> <span class=nb>NULL</span><span class=p>);</span>
+</code></pre></td></tr></table></div></div><p>总结如下：</p><ul><li>扫描设备树的<code>chosen</code>节点，获取内核命令行，initrd等关键信息，其中内核并命令行被保存在<code>boot_command_line</code>字符数组中</li><li>扫描<code>/</code>节点下的<code>#address-cells</code>，<code>#size-cells</code>等信息并记录</li><li>扫描<code>memory</code>节点信息，获取设备树中关于内存的描述，并调用<code>early_init_dt_add_memory_arch</code></li></ul><p><code>early_init_dt_add_memory_arch</code>函数RISC-V使用了内核默认的实现，即将内核区域添加到<code>memblock</code>中。也就是说，RISC-V架构下的启动内存管理器是memblock，memblock的实现比较独立，另开文档进行分析。</p><p>在<code>setup_arch</code>中调用了<code>parse_early_param</code>通用函数，用于解析<code>early param</code>。内核中的<code>early param</code>都会特殊标记起来，保存在一个特殊的section里，在内核启动初期从内核命令行解析出来。</p><h3 id=memblock初始化>memblock初始化</h3><p>前面看到，内核中设备树解析的通用代码将设备树中设定的可用内存区域传递给<code>memblock</code>进行管理。而在<code>setup_arch</code>中则调用<code>setup_bootmem</code>初始化memblock。</p><p>前面已经看到，从设备树中读取到的可用物理内存范围已经在内核默认的<code>early_init_dt_add_memory_arch</code>中加入到了memblock管理器中。此时，memblock还需要进行一些别的操作，使其可用。首当其冲的就是保留特定物理内存，这一点是比较容易想到的。一般情况下，设备树描述的是整个板子可用的物理内存区域，内核二进制，设备树二进制装载进内存时也会占用其中一部分空间，这就需要<code>setup_bootmem</code>函数手动保留这些区域。</p><p>如果读过设备树的标准，则应该知道，设备树中存在<code>reserved memory</code>的描述，因此<code>setup_bootmem</code>调用<code>early_init_fdt_scan_reserved_mem</code>函数进行扫描，然后将对应参数进行保留。最后函数将所有物理内存区域的NUMA节点设置为0。</p><p>这里还有一个点可以稍微提一下：在RISC-V体系结构下，如果开启两级页表，那么最大能够支持的物理内存大小是2GB，如果可用物理内存大小超过了2GB，页表是无法进行映射的。<code>setup_bootmem</code>函数因此进行了一项修复，即将超出最大支持范围的物理内存区域从bootmem中移除，避免对其的访问。对二进制比较敏感的话，可以想到，这一大小正好是<code>-PAGE_OFFSET</code>。</p><h3 id=paging_init>paging_init</h3><p>从名字上就可以看出这个函数是干什么的：初始化页表。前一篇文档看到内核在<code>setup_vm</code>中初始化了一个<code>early_pg_dir</code>页表，仅仅映射了内核所占用内存和一个FDT的fixmap，而<code>paging_init</code>中的<code>setup_vm_final</code>则是该操作的延续。首先明确使用两级初始化的原因：</p><ul><li>在没有读取设备树之前，内核是不知道物理内存的大小的。如果非要缩成一步，那么只能从内核所在内存结尾处开始，猜一个大小然后进行映射。这种实现有巨大的不确定性，并不是一个好的选择</li><li>紧接上一条，这么做有可能需要映射一些不存在的内存区域，使得页表占用更多空间</li></ul><p>所以<code>setup_vm_final</code>的操作本质上就是将memblock中管理的内存添加到到<code>swapper_pg_dir</code>页表中，然后启用该页表。</p><p><code>paging_init</code>随后初始化<code>Sparse Memory</code>，当然我们这里没有开启其对应支持，不予分析。<code>setup_zero_page</code>函数将内核预先在BSS中预留的一个page进行初始化操作（全写0）。<code>zone_size_init</code>函数实现比较简单，但是原先分析时漏掉了一点，这里补上。</p><p>目前的内核已经把bootmem去掉了，但是它的影响依然在内核中。<code>setup_bootmem</code>函数中设置了几个变量，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>set_max_mapnr</span><span class=p>(</span><span class=n>PFN_DOWN</span><span class=p>(</span><span class=n>mem_size</span><span class=p>));</span>
+	<span class=n>max_pfn</span> <span class=o>=</span> <span class=n>PFN_DOWN</span><span class=p>(</span><span class=n>memblock_end_of_DRAM</span><span class=p>());</span>
+	<span class=n>max_low_pfn</span> <span class=o>=</span> <span class=n>max_pfn</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p>这几个静态变量的意义如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-fallback data-lang=fallback>    min_low_pfn - the lowest PFN that is available in the system
+    max_low_pfn - the highest PFN that may be addressed by low memory (ZONE_NORMAL)
+    max_pfn - the last PFN available to the system.
+</code></pre></td></tr></table></div></div><p><code>zone_size_init</code>如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=kt>void</span> <span class=n>__init</span> <span class=nf>zone_sizes_init</span><span class=p>(</span><span class=kt>void</span><span class=p>)</span>
+<span class=p>{</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>max_zone_pfns</span><span class=p>[</span><span class=n>MAX_NR_ZONES</span><span class=p>]</span> <span class=o>=</span> <span class=p>{</span> <span class=mi>0</span><span class=p>,</span> <span class=p>};</span>
+
+<span class=cp>#ifdef CONFIG_ZONE_DMA32
+</span><span class=cp></span>	<span class=n>max_zone_pfns</span><span class=p>[</span><span class=n>ZONE_DMA32</span><span class=p>]</span> <span class=o>=</span> <span class=n>PFN_DOWN</span><span class=p>(</span><span class=n>min</span><span class=p>(</span><span class=mi>4UL</span> <span class=o>*</span> <span class=n>SZ_1G</span><span class=p>,</span>
+			<span class=p>(</span><span class=kt>unsigned</span> <span class=kt>long</span><span class=p>)</span> <span class=n>PFN_PHYS</span><span class=p>(</span><span class=n>max_low_pfn</span><span class=p>)));</span>
+<span class=cp>#endif
+</span><span class=cp></span>	<span class=n>max_zone_pfns</span><span class=p>[</span><span class=n>ZONE_NORMAL</span><span class=p>]</span> <span class=o>=</span> <span class=n>max_low_pfn</span><span class=p>;</span>
+
+	<span class=n>free_area_init_nodes</span><span class=p>(</span><span class=n>max_zone_pfns</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>可以看到<code>ZONE_DMA32</code>的边界为4GB，这基本就是废话。记住这里初始化了<code>pg_data_t</code>就行了。</p><h3 id=unflatten_device_tree>unflatten_device_tree</h3><p>该函数为OF模块的代码，目的是将设备树转换成更高效的内存中表示。</p><h3 id=sbi_init--setup_smp--riscv_fill_hwcap>sbi_init && setup_smp && riscv_fill_hwcap</h3><p>这些非常独立的部分单独进行分析。</p><h2 id=进程管理>进程管理</h2><p>进程管理与体系结构相关的地方基本就是上下文切换了，在内核一般被称为switch。为了高速进行上下文切换，这个过程涉及的一部分数据结构和相关操作是与体系结构强相关的。<strong>任务</strong>上下文切换的基本执行操作由<code>__switch_to</code>完成，一般会再包装一层<code>switch_to</code>，现在以这个函数入手，分析RISC-V平台下对应的实现。</p><p><code>__switch_to</code>在各个体系结构下有对应的实现，是体系结构强相关的。这是因为其基本行为就是保存当前CPU的执行状态，然后再装载一个其他的执行状态，这其中涉及到的寄存器保存等操作在每个体系结构都不一样。<code>__switch_to</code>函数在RISC-V下由汇编实现，位于<code>arch/riscv/kernel/entry.S</code>中，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm><span class=nf>ENTRY</span><span class=p>(</span><span class=no>__switch_to</span><span class=p>)</span>
+        <span class=err>/*</span> <span class=nf>Save</span> <span class=no>context</span> <span class=no>into</span> <span class=no>prev-</span><span class=err>&gt;</span><span class=no>thread</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>li</span>    <span class=no>a4</span><span class=p>,</span>  <span class=no>TASK_THREAD_RA</span>
+        <span class=nf>add</span>   <span class=no>a3</span><span class=p>,</span> <span class=no>a0</span><span class=p>,</span> <span class=no>a4</span>
+        <span class=nf>add</span>   <span class=no>a4</span><span class=p>,</span> <span class=no>a1</span><span class=p>,</span> <span class=no>a4</span>
+        <span class=nf>REG_S</span> <span class=no>ra</span><span class=p>,</span>  <span class=no>TASK_THREAD_RA_RA</span><span class=p>(</span><span class=no>a3</span><span class=p>)</span>
+        <span class=nf>REG_S</span> <span class=no>sp</span><span class=p>,</span>  <span class=no>TASK_THREAD_SP_RA</span><span class=p>(</span><span class=no>a3</span><span class=p>)</span>
+        <span class=nf>REG_S</span> <span class=no>s0</span><span class=p>,</span>  <span class=no>TASK_THREAD_S0_RA</span><span class=p>(</span><span class=no>a3</span><span class=p>)</span>
+        <span class=nf>REG_S</span> <span class=no>s1</span><span class=p>,</span>  <span class=no>TASK_THREAD_S1_RA</span><span class=p>(</span><span class=no>a3</span><span class=p>)</span>
+        <span class=nf>REG_S</span> <span class=no>s2</span><span class=p>,</span>  <span class=no>TASK_THREAD_S2_RA</span><span class=p>(</span><span class=no>a3</span><span class=p>)</span>
+        <span class=na>...</span>
+        <span class=nf>REG_S</span> <span class=no>s11</span><span class=p>,</span> <span class=no>TASK_THREAD_S11_RA</span><span class=p>(</span><span class=no>a3</span><span class=p>)</span>
+        <span class=err>/*</span> <span class=nf>Restore</span> <span class=no>context</span> <span class=no>from</span> <span class=no>next-</span><span class=err>&gt;</span><span class=no>thread</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>REG_L</span> <span class=no>ra</span><span class=p>,</span>  <span class=no>TASK_THREAD_RA_RA</span><span class=p>(</span><span class=no>a4</span><span class=p>)</span>
+        <span class=nf>REG_L</span> <span class=no>sp</span><span class=p>,</span>  <span class=no>TASK_THREAD_SP_RA</span><span class=p>(</span><span class=no>a4</span><span class=p>)</span>
+        <span class=nf>REG_L</span> <span class=no>s0</span><span class=p>,</span>  <span class=no>TASK_THREAD_S0_RA</span><span class=p>(</span><span class=no>a4</span><span class=p>)</span>
+        <span class=nf>REG_L</span> <span class=no>s1</span><span class=p>,</span>  <span class=no>TASK_THREAD_S1_RA</span><span class=p>(</span><span class=no>a4</span><span class=p>)</span>
+        <span class=na>...</span>
+        <span class=nf>REG_L</span> <span class=no>s11</span><span class=p>,</span> <span class=no>TASK_THREAD_S11_RA</span><span class=p>(</span><span class=no>a4</span><span class=p>)</span>
+        <span class=err>/*</span> <span class=nf>Swap</span> <span class=no>the</span> <span class=no>CPU</span> <span class=no>entry</span> <span class=no>around.</span> <span class=p>*</span><span class=err>/</span>
+        <span class=nf>lw</span> <span class=no>a3</span><span class=p>,</span> <span class=no>TASK_TI_CPU</span><span class=p>(</span><span class=no>a0</span><span class=p>)</span>
+        <span class=nf>lw</span> <span class=no>a4</span><span class=p>,</span> <span class=no>TASK_TI_CPU</span><span class=p>(</span><span class=no>a1</span><span class=p>)</span>
+        <span class=nf>sw</span> <span class=no>a3</span><span class=p>,</span> <span class=no>TASK_TI_CPU</span><span class=p>(</span><span class=no>a1</span><span class=p>)</span>
+        <span class=nf>sw</span> <span class=no>a4</span><span class=p>,</span> <span class=no>TASK_TI_CPU</span><span class=p>(</span><span class=no>a0</span><span class=p>)</span>
+<span class=c>#if TASK_TI != 0
+</span><span class=c>#error &#34;TASK_TI != 0: tp will contain a &#39;struct thread_info&#39;, not a &#39;struct task_struct&#39; so get_current() won&#39;t work.&#34;
+</span><span class=c></span>        <span class=nf>addi</span> <span class=no>tp</span><span class=p>,</span> <span class=no>a1</span><span class=p>,</span> <span class=no>TASK_TI</span>
+<span class=c>#else
+</span><span class=c></span>        <span class=nf>move</span> <span class=no>tp</span><span class=p>,</span> <span class=no>a1</span>
+<span class=c>#endif
+</span><span class=c></span>        <span class=nf>ret</span>
+<span class=nf>ENDPROC</span><span class=p>(</span><span class=no>__switch_to</span><span class=p>)</span>
+
+</code></pre></td></tr></table></div></div><p>实现是比较简单的，这里稍微解读一下：</p><ul><li><code>a0</code>和<code>a1</code>分别为进行上下文切换的两个<code>task_struct</code>地址</li><li>需要保存的执行状态被称作<code>thread_struct</code>，与体系结构相关，被定义在<code>asm/processor.h</code>中。或许有人会奇怪为什么保存的寄存器这么少，只有<code>ra</code>，<code>sp</code>，<code>s0</code>-<code>s11</code>。这个解释比较简单，注意它们在RISC-V ABI中被称作<code>Callee-Saved</code>寄存器，被调用函数方需要保存的寄存器，反之就是其他寄存器已经被调用方保存过了（栈上）。也就是说<code>__switch_to</code>只需要保存这些没有被保存的寄存器，结合栈上原有的寄存器，即可还原处理器状态。</li><li><code>tp</code>寄存器全称<code>thread pointer</code>，在内核态中用于保存当前<code>task_struct</code>的指针。上下文切换时，需要更改该寄存器。</li><li>注意<code>__switch_to</code>函数有返回值，返回值为<code>a0</code>。注意<code>a0</code>从头到尾没有变化，正确理解这个行为其实就是正确理解上下文切换的关键。</li><li>最后一个细节，<code>TASK_TI_CPU</code>等常量是哪里来的呢。这个问题本质为C与汇编的互通有无问题，如果想要在汇编中访问结构体的字段，其常规操作为结构体指针加上一个偏移量。<code>Kbuild</code>提供了<code>asm-offsets.h</code>机制，开发者只需要在<code>asm-offsets.c</code>中定义macro和其对应的结构体和结构体中的字段，内核的<code>Kbuild</code>即可自行生成<code>asm-offsets.h</code>供汇编代码引用。</li></ul><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cm>/* CPU-specific state of a task */</span>
+<span class=k>struct</span> <span class=n>thread_struct</span> <span class=p>{</span>
+	<span class=cm>/* Callee-saved registers */</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>ra</span><span class=p>;</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>sp</span><span class=p>;</span>	<span class=cm>/* Kernel mode stack */</span>
+	<span class=kt>unsigned</span> <span class=kt>long</span> <span class=n>s</span><span class=p>[</span><span class=mi>12</span><span class=p>];</span>	<span class=cm>/* s[0]: frame pointer */</span>
+	<span class=k>struct</span> <span class=n>__riscv_d_ext_state</span> <span class=n>fstate</span><span class=p>;</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>上面是不是少了什么东西？很明显少了浮点和向量寄存器的处理。很多书上其实写明白了，内核中并不使用浮点或者向量指令，因此这两类指令相关的寄存器管理是需要区别对待的。这方面一个比较普遍的优化原理就是内核对用户态进程对于浮点或者向量指令的使用进行检测，仅当用户态使用了时才在上下文切换时记录对应的状态。来看RISC-V是如何实现真正的上下文入口<code>switch_to</code>的：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cp>#define switch_to(prev, next, last)			\
+</span><span class=cp>do {							\
+</span><span class=cp>	struct task_struct *__prev = (prev);		\
+</span><span class=cp>	struct task_struct *__next = (next);		\
+</span><span class=cp>	if (has_fpu)					\
+</span><span class=cp>		__switch_to_aux(__prev, __next);	\
+</span><span class=cp>	((last) = __switch_to(__prev, __next));		\
+</span><span class=cp>} while (0)
+</span></code></pre></td></tr></table></div></div><p>和其他体系结构大同小异，<code>switch_to</code>是一个宏，它的参数意义大部分书中都有涉及，这里只详细解释一下<code>last</code>参数的行为在RISC-V下是如何实现的。首先一定要明确<code>__prev</code> 和<code>__next</code>这两个变量的声明，这两个变量是保存在<strong>栈上</strong>的，只要栈（指针）发生了改变，那么这两个变量的值就会发生改变。调用<code>__switch_to</code>函数时，参数通过<code>a0</code>传入，因此<code>__switch_to</code>的<code>a0</code>一定是上一次上下文切换时的<code>task_struct</code>，假设其为A。而当<code>__switch_to</code>执行完毕之后，由于栈指针发生了改变，变为A被上下文切换时的栈指针，此时的<code>__prev</code>变为了A被上下文切换时处理器执行的前一个任务。</p><p>回归重点，即当<code>has_fpu</code>为<code>true</code>时的<code>__switch_to_aux</code>路径。内核提供<code>CONFIG_FPU</code>选项配置内核对FPU的支持，在支持FPU的情况下，如果<code>status</code>寄存器的<code>SD</code>位被设置，说明需要保存FPU状态，此时内核调用<code>fstate_save</code>函数将FPU寄存器保存。如果被切换到的任务的浮点寄存器已被使用，则将其状态恢复：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=kr>inline</span> <span class=kt>void</span> <span class=nf>fstate_restore</span><span class=p>(</span><span class=k>struct</span> <span class=n>task_struct</span> <span class=o>*</span><span class=n>task</span><span class=p>,</span>
+				  <span class=k>struct</span> <span class=n>pt_regs</span> <span class=o>*</span><span class=n>regs</span><span class=p>)</span>
+<span class=p>{</span>
+	<span class=k>if</span> <span class=p>((</span><span class=n>regs</span><span class=o>-&gt;</span><span class=n>status</span> <span class=o>&amp;</span> <span class=n>SR_FS</span><span class=p>)</span> <span class=o>!=</span> <span class=n>SR_FS_OFF</span><span class=p>)</span> <span class=p>{</span>
+		<span class=n>__fstate_restore</span><span class=p>(</span><span class=n>task</span><span class=p>);</span>
+		<span class=n>__fstate_clean</span><span class=p>(</span><span class=n>regs</span><span class=p>);</span>
+	<span class=p>}</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><h2 id=中断异常与系统调用>中断、异常与系统调用</h2><p><code>start_kernel</code>函数的开头会调用<code>local_irq_disable</code>将当前CPU的中断处理关闭，这是非常正常的，毕竟这个阶段内核没有做好处理中断的准备，而此时的中断向量也是<code>head.S</code>中利用<code>trampoline</code>进行虚拟地址跳跃时设置的。RISC-V下的中断向量是<code>trap_init</code>中设置的，定义在<code>arch/riscv/traps.c</code>中，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=kt>void</span> <span class=nf>trap_init</span><span class=p>(</span><span class=kt>void</span><span class=p>)</span>
+<span class=p>{</span>
+	<span class=cm>/*
+</span><span class=cm>	 * Set sup0 scratch register to 0, indicating to exception vector
+</span><span class=cm>	 * that we are presently executing in the kernel
+</span><span class=cm>	 */</span>
+	<span class=n>csr_write</span><span class=p>(</span><span class=n>CSR_SCRATCH</span><span class=p>,</span> <span class=mi>0</span><span class=p>);</span>
+	<span class=cm>/* Set the exception vector address */</span>
+	<span class=n>csr_write</span><span class=p>(</span><span class=n>CSR_TVEC</span><span class=p>,</span> <span class=o>&amp;</span><span class=n>handle_exception</span><span class=p>);</span>
+	<span class=cm>/* Enable interrupts */</span>
+	<span class=n>csr_write</span><span class=p>(</span><span class=n>CSR_IE</span><span class=p>,</span> <span class=n>IE_SIE</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>对于<code>CSR_SCRATCH</code>寄存器的设计用途，RISC-V的手册中讲的不明所以，这在后续的代码分析中就会明晰。<code>traps_init</code>函数随后将中断向量设置为<code>handle_exception</code>函数的地址，并将软件中断打开。在处理器不同状态之间跳转的代码一般实现在体系结构对应的<code>entry.S</code>中，RISC-V也不例外。这里注意<code>CSR_TVEC</code>的最低两位是中断处理模式，由于RISC-V指令为4字节对齐，那么这个模式位必为0，也就是所有的中断都会由<code>handle_exception</code>处理。</p><p>传统意义上的I/O中断，异常，以及系统调用都由<code>handle_exception</code>进行处理，这就意味着该函数的实现相对复杂，需要好好梳理。从这个函数中我们也可以分析出<code>CSR_SCRATCH</code>寄存器是如何使用的。Linux内核使用<code>CSR_SCRATCH</code>寄存器保存当前特权级对立特权级（内核态对应用户态，用户态对应内核态）的<code>tp</code>寄存器的值，且如果<code>CSR_SCRATCH</code>为0则表示中断是在内核态触发的。函数开头如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm><span class=nf>ENTRY</span><span class=p>(</span><span class=no>handle_exception</span><span class=p>)</span>
+	<span class=err>/*</span>
+	 <span class=err>*</span> <span class=nf>If</span> <span class=no>coming</span> <span class=no>from</span> <span class=no>userspace</span><span class=p>,</span> <span class=no>preserve</span> <span class=no>the</span> <span class=no>user</span> <span class=no>thread</span> <span class=no>pointer</span> <span class=no>and</span> <span class=no>load</span>
+	 <span class=err>*</span> <span class=nf>the</span> <span class=no>kernel</span> <span class=no>thread</span> <span class=no>pointer.</span>  <span class=no>If</span> <span class=no>we</span> <span class=no>came</span> <span class=no>from</span> <span class=no>the</span> <span class=no>kernel</span><span class=p>,</span> <span class=no>the</span> <span class=no>scratch</span>
+	 <span class=err>*</span> <span class=nf>register</span> <span class=no>will</span> <span class=no>contain</span> <span class=mi>0</span><span class=p>,</span> <span class=no>and</span> <span class=no>we</span> <span class=no>should</span> <span class=no>continue</span> <span class=no>on</span> <span class=no>the</span> <span class=no>current</span> <span class=no>TP.</span>
+	 <span class=err>*/</span>
+	<span class=nf>csrrw</span> <span class=no>tp</span><span class=p>,</span> <span class=no>CSR_SCRATCH</span><span class=p>,</span> <span class=no>tp</span>
+	<span class=nf>bnez</span> <span class=no>tp</span><span class=p>,</span> <span class=no>_save_context</span>
+
+<span class=nl>_restore_kernel_tpsp:</span>
+	<span class=nf>csrr</span> <span class=no>tp</span><span class=p>,</span> <span class=no>CSR_SCRATCH</span>
+	<span class=nf>REG_S</span> <span class=no>sp</span><span class=p>,</span> <span class=no>TASK_TI_KERNEL_SP</span><span class=p>(</span><span class=no>tp</span><span class=p>)</span>
+<span class=nl>_save_context:</span>
+	<span class=na>...</span>
+</code></pre></td></tr></table></div></div><p>即先将当前<code>tp</code>的值与<code>CSR_SCRATCH</code>的值进行交换，如果发现<code>CSR_SCRATCH</code>的值为0，则明显是由内核态跳入异常处理的，此时需要将<code>tp</code>寄存器的值还原，并将此时的内核栈指针保存在<code>struct thread_info</code>的<code>kernel_sp</code>字段中。从函数中可以看到，<code>thread_info->kernel_sp</code>的值在每次进入异常处理时都会被写掉，但由于<code>handle_exception</code>记录了<code>pt_regs</code>，因此异常退出时该值可以被还原。</p><p><code>_save_context</code>本质上是在栈上保存一个<code>pt_regs</code>，不赘述。随后<code>CSR_SCRATCH</code>被写0用以标记内核态，如前面所述。接下来装载<code>gp</code>寄存器，这对C语言运行环境是至关重要的。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>	<span class=err>/*</span> <span class=nf>Load</span> <span class=no>the</span> <span class=no>global</span> <span class=no>pointer</span> <span class=p>*</span><span class=err>/</span>
+<span class=na>.option</span> <span class=no>push</span>
+<span class=na>.option</span> <span class=no>norelax</span>
+	<span class=nf>la</span> <span class=no>gp</span><span class=p>,</span> <span class=no>__global_pointer$</span>
+<span class=na>.option</span> <span class=no>po</span>
+</code></pre></td></tr></table></div></div><p>注意<code>norelax</code>属性可以要求链接器不对标记区域的指令进行重排优化操作。</p><h3 id=中断>中断</h3><p>可以通过<code>CSR_CAUSE</code>的最高位确定当前是否是中断，所以有如下实现：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>	<span class=nf>la</span> <span class=no>ra</span><span class=p>,</span> <span class=no>ret_from_exception</span>
+	<span class=err>/*</span>
+	 <span class=err>*</span> <span class=nf>MSB</span> <span class=no>of</span> <span class=no>cause</span> <span class=no>differentiates</span> <span class=no>between</span>
+	 <span class=err>*</span> <span class=nf>interrupts</span> <span class=no>and</span> <span class=no>exceptions</span>
+	 <span class=err>*/</span>
+	<span class=nf>bge</span> <span class=no>s4</span><span class=p>,</span> <span class=no>zero</span><span class=p>,</span> <span class=mi>1</span><span class=no>f</span>
+
+	<span class=err>/*</span> <span class=nf>Handle</span> <span class=no>interrupts</span> <span class=p>*</span><span class=err>/</span>
+	<span class=nf>move</span> <span class=no>a0</span><span class=p>,</span> <span class=no>sp</span> <span class=err>/</span><span class=p>*</span> <span class=no>pt_regs</span> <span class=p>*</span><span class=err>/</span>
+	<span class=nf>tail</span> <span class=no>do_IRQ</span>
+</code></pre></td></tr></table></div></div><p>函数<code>do_IRQ</code>的返回地址被设置成了<code>ret_from_exception</code>，如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm><span class=nl>ret_from_exception:</span>
+	<span class=nf>REG_L</span> <span class=no>s0</span><span class=p>,</span> <span class=no>PT_STATUS</span><span class=p>(</span><span class=no>sp</span><span class=p>)</span>
+	<span class=nf>csrc</span> <span class=no>CSR_STATUS</span><span class=p>,</span> <span class=no>SR_IE</span>
+<span class=c>#ifdef CONFIG_RISCV_M_MODE
+</span><span class=c></span>	<span class=err>/*</span> <span class=nf>the</span> <span class=no>MPP</span> <span class=no>value</span> <span class=no>is</span> <span class=no>too</span> <span class=no>large</span> <span class=no>to</span> <span class=no>be</span> <span class=no>used</span> <span class=no>as</span> <span class=no>an</span> <span class=no>immediate</span> <span class=no>arg</span> <span class=no>for</span> <span class=no>addi</span> <span class=p>*</span><span class=err>/</span>
+	<span class=nf>li</span> <span class=no>t0</span><span class=p>,</span> <span class=no>SR_MPP</span>
+	<span class=nf>and</span> <span class=no>s0</span><span class=p>,</span> <span class=no>s0</span><span class=p>,</span> <span class=no>t0</span>
+<span class=c>#else
+</span><span class=c></span>	<span class=nf>andi</span> <span class=no>s0</span><span class=p>,</span> <span class=no>s0</span><span class=p>,</span> <span class=no>SR_SPP</span>
+<span class=c>#endif
+</span><span class=c></span>	<span class=nf>bnez</span> <span class=no>s0</span><span class=p>,</span> <span class=no>resume_kernel</span>
+<span class=nl>resume_userspace:</span>
+</code></pre></td></tr></table></div></div><p>通过<code>CSR_STATUS</code>上的<code>SPP</code>位可以获取到<code>handle_exception</code>跳转执行时原先CPU位于的特权级，对于内核态和用户态需要区分对待。实际上这两者最本质的区别就是对抢占的处理，<code>resume_kernel</code>会根据内核编译时是否支持抢占执行对应的操作：如果支持抢占，则检查当前任务的<code>preempt_count</code>和<code>TIF_NEED_RESCHED</code>标志，进行抢占操作，反之则直接返回。注意这里这个<code>ret_from_exception</code>是由多个路径共享的。</p><p><code>do_IRQ</code>中根据<code>CSR_CAUSE</code>的值确定中断来源：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=k>switch</span> <span class=p>(</span><span class=n>regs</span><span class=o>-&gt;</span><span class=n>cause</span> <span class=o>&amp;</span> <span class=o>~</span><span class=n>CAUSE_IRQ_FLAG</span><span class=p>)</span> <span class=p>{</span>
+	<span class=k>case</span> <span class=nl>RV_IRQ_TIMER</span><span class=p>:</span>
+		<span class=n>riscv_timer_interrupt</span><span class=p>();</span>
+		<span class=k>break</span><span class=p>;</span>
+<span class=cp>#ifdef CONFIG_SMP
+</span><span class=cp></span>	<span class=k>case</span> <span class=nl>RV_IRQ_SOFT</span><span class=p>:</span>
+		<span class=cm>/*
+</span><span class=cm>		 * We only use software interrupts to pass IPIs, so if a non-SMP
+</span><span class=cm>		 * system gets one, then we don&#39;t know what to do.
+</span><span class=cm>		 */</span>
+		<span class=n>riscv_software_interrupt</span><span class=p>();</span>
+		<span class=k>break</span><span class=p>;</span>
+<span class=cp>#endif
+</span><span class=cp></span>	<span class=k>case</span> <span class=nl>RV_IRQ_EXT</span><span class=p>:</span>
+		<span class=n>handle_arch_irq</span><span class=p>(</span><span class=n>regs</span><span class=p>);</span>
+		<span class=k>break</span><span class=p>;</span>
+	<span class=k>default</span><span class=o>:</span>
+		<span class=n>pr_alert</span><span class=p>(</span><span class=s>&#34;unexpected interrupt cause 0x%lx&#34;</span><span class=p>,</span> <span class=n>regs</span><span class=o>-&gt;</span><span class=n>cause</span><span class=p>);</span>
+		<span class=n>BUG</span><span class=p>();</span>
+	<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>其中，<code>handle_arch_irq</code>是中断控制器驱动通过调用<code>set_handle_irq</code>注册的中断处理函数。Linux内核中对于RISC-V专门实现了对应的时钟源：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=cm>/* called directly from the low-level interrupt handler */</span>
+<span class=kt>void</span> <span class=nf>riscv_timer_interrupt</span><span class=p>(</span><span class=kt>void</span><span class=p>)</span>
+<span class=p>{</span>
+	<span class=k>struct</span> <span class=n>clock_event_device</span> <span class=o>*</span><span class=n>evdev</span> <span class=o>=</span> <span class=n>this_cpu_ptr</span><span class=p>(</span><span class=o>&amp;</span><span class=n>riscv_clock_event</span><span class=p>);</span>
+
+	<span class=n>csr_clear</span><span class=p>(</span><span class=n>CSR_IE</span><span class=p>,</span> <span class=n>IE_TIE</span><span class=p>);</span>
+	<span class=n>evdev</span><span class=o>-&gt;</span><span class=n>event_handler</span><span class=p>(</span><span class=n>evdev</span><span class=p>);</span>
+<span class=p>}</span>
+</code></pre></td></tr></table></div></div><p>而<code>riscv_software_interrupt</code>只用于处理IPI中断，有机会的话单独分析。</p><h3 id=系统调用>系统调用</h3><p>系统调用的实现非常简单，如果<code>handle_exception</code>判断进入异常的原因为系统调用，则会：</p><ul><li>检查系统调用号合法性</li><li>处理系统调用tracer</li><li>通过<code>sys_call_table</code>和系统调用号拿到系统调用的函数指针，并跳转执行</li></ul><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>	<span class=nf>li</span> <span class=no>t1</span><span class=p>,</span> <span class=p>-</span><span class=mi>1</span>
+	<span class=nf>beq</span> <span class=no>a7</span><span class=p>,</span> <span class=no>t1</span><span class=p>,</span> <span class=no>ret_from_syscall_rejected</span>
+	<span class=nf>blt</span> <span class=no>a7</span><span class=p>,</span> <span class=no>t1</span><span class=p>,</span> <span class=mi>1</span><span class=no>f</span>
+	<span class=err>/*</span> <span class=nf>Call</span> <span class=no>syscall</span> <span class=p>*</span><span class=err>/</span>
+	<span class=nf>la</span> <span class=no>s0</span><span class=p>,</span> <span class=no>sys_call_table</span>
+	<span class=nf>slli</span> <span class=no>t0</span><span class=p>,</span> <span class=no>a7</span><span class=p>,</span> <span class=no>RISCV_LGPTR</span>
+	<span class=nf>add</span> <span class=no>s0</span><span class=p>,</span> <span class=no>s0</span><span class=p>,</span> <span class=no>t0</span>
+	<span class=nf>REG_L</span> <span class=no>s0</span><span class=p>,</span> <span class=mi>0</span><span class=p>(</span><span class=no>s0</span><span class=p>)</span>
+<span class=err>1:</span>
+	<span class=nf>jalr</span> <span class=no>s0</span>
+</code></pre></td></tr></table></div></div><h3 id=其他异常>其他异常</h3><p>除了系统调用和中断之外的异常处理通过<code>excp_vect_table</code>之中注册的函数指针完成：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-asm data-lang=asm>	<span class=err>/*</span> <span class=nf>Handle</span> <span class=no>other</span> <span class=no>exceptions</span> <span class=p>*</span><span class=err>/</span>
+	<span class=nf>slli</span> <span class=no>t0</span><span class=p>,</span> <span class=no>s4</span><span class=p>,</span> <span class=no>RISCV_LGPTR</span>
+	<span class=nf>la</span> <span class=no>t1</span><span class=p>,</span> <span class=no>excp_vect_table</span>
+	<span class=nf>la</span> <span class=no>t2</span><span class=p>,</span> <span class=no>excp_vect_table_end</span>
+	<span class=nf>move</span> <span class=no>a0</span><span class=p>,</span> <span class=no>sp</span> <span class=err>/</span><span class=p>*</span> <span class=no>pt_regs</span> <span class=p>*</span><span class=err>/</span>
+	<span class=nf>add</span> <span class=no>t0</span><span class=p>,</span> <span class=no>t1</span><span class=p>,</span> <span class=no>t0</span>
+	<span class=err>/*</span> <span class=nf>Check</span> <span class=no>if</span> <span class=no>exception</span> <span class=no>code</span> <span class=no>lies</span> <span class=no>within</span> <span class=no>bounds</span> <span class=p>*</span><span class=err>/</span>
+	<span class=nf>bgeu</span> <span class=no>t0</span><span class=p>,</span> <span class=no>t2</span><span class=p>,</span> <span class=mi>1</span><span class=no>f</span>
+	<span class=nf>REG_L</span> <span class=no>t0</span><span class=p>,</span> <span class=mi>0</span><span class=p>(</span><span class=no>t0</span><span class=p>)</span>
+	<span class=nf>jr</span> <span class=no>t0</span>
+</code></pre></td></tr></table></div></div></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2020-08-05</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/kernel/>kernel</a>
+<a href=/crab2313.github.io/tags/risc-v/>risc-v</a></div><nav class=post-nav><a class=prev href=crab2313.github.io/post/riscv-atomic-barrier-bitops/><i class="iconfont icon-left"></i>
+<span class="prev-text nav-default">Linux内核在RISC-V架构下的内存屏障与原子操作</span>
+<span class="prev-text nav-mobile">上一篇</span></a>
+<a class=next href=crab2313.github.io/post/riscv-build-and-boot/><span class="next-text nav-default">Linux内核在RISC-V架构下的构建与启动</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>

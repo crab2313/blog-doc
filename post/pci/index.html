@@ -1,0 +1,115 @@
+<!doctype html><html lang=zh-cn><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge,chrome=1"><title>PCI驱动框架分析 - crab2313's blog</title><meta name=renderer content="webkit"><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv=cache-control content="no-transform"><meta http-equiv=cache-control content="no-siteapp"><meta name=theme-color content="#f8f5ec"><meta name=msapplication-navbutton-color content="#f8f5ec"><meta name=apple-mobile-web-app-capable content="yes"><meta name=apple-mobile-web-app-status-bar-style content="#f8f5ec"><meta name=author content="crab2313"><meta name=description content="PCI 分析流程： 硬件文档 PCI框架核心层 PCI框架热插拔 vfio iommu vfio接口层与用户态使用cloud-hypervisor 一共十一万行代码。 从ACP"><meta name=keywords content="blog,kernel"><meta name=generator content="Hugo 0.82.0 with theme even"><link rel=canonical href=crab2313.github.io/post/pci/><link rel=apple-touch-icon sizes=180x180 href=/crab2313.github.io/apple-touch-icon.png><link rel=icon type=image/png sizes=32x32 href=/crab2313.github.io/favicon-32x32.png><link rel=icon type=image/png sizes=16x16 href=/crab2313.github.io/favicon-16x16.png><link rel=manifest href=/crab2313.github.io/manifest.json><link rel=mask-icon href=/crab2313.github.io/safari-pinned-tab.svg color=#5bbad5><link href=/crab2313.github.io/sass/main.min.39a3e01cac9473be1356f3572fcfe34b2e363efabad244a99a40f28a812c837e.css rel=stylesheet><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.css integrity="sha256-7TyXnr2YU040zfSP+rEcz29ggW4j56/ujTPwjMzyqFY=" crossorigin=anonymous><meta property="og:title" content="PCI驱动框架分析"><meta property="og:description" content="PCI 分析流程： 硬件文档 PCI框架核心层 PCI框架热插拔 vfio iommu vfio接口层与用户态使用cloud-hypervisor 一共十一万行代码。 从ACP"><meta property="og:type" content="article"><meta property="og:url" content="crab2313.github.io/post/pci/"><meta property="article:section" content="post"><meta property="article:published_time" content="2020-02-19T00:00:00+00:00"><meta property="article:modified_time" content="2020-02-19T00:00:00+00:00"><meta itemprop=name content="PCI驱动框架分析"><meta itemprop=description content="PCI 分析流程： 硬件文档 PCI框架核心层 PCI框架热插拔 vfio iommu vfio接口层与用户态使用cloud-hypervisor 一共十一万行代码。 从ACP"><meta itemprop=datePublished content="2020-02-19T00:00:00+00:00"><meta itemprop=dateModified content="2020-02-19T00:00:00+00:00"><meta itemprop=wordCount content="1330"><meta itemprop=keywords content="kernel,pci,"><meta name=twitter:card content="summary"><meta name=twitter:title content="PCI驱动框架分析"><meta name=twitter:description content="PCI 分析流程： 硬件文档 PCI框架核心层 PCI框架热插拔 vfio iommu vfio接口层与用户态使用cloud-hypervisor 一共十一万行代码。 从ACP"><!--[if lte IE 9]><script src=https://cdnjs.cloudflare.com/ajax/libs/classlist/1.1.20170427/classList.min.js></script><![endif]--><!--[if lt IE 9]><script src=https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js></script><script src=https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js></script><![endif]--></head><body><div id=mobile-navbar class=mobile-navbar><div class=mobile-header-logo><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><div class=mobile-navbar-icon><span></span><span></span><span></span></div></div><nav id=mobile-menu class="mobile-menu slideout-menu"><ul class=mobile-menu-list><a href=crab2313.github.io/><li class=mobile-menu-item>Home</li></a><a href=crab2313.github.io/post/><li class=mobile-menu-item>Archives</li></a><a href=crab2313.github.io/tags/><li class=mobile-menu-item>Tags</li></a><a href=crab2313.github.io/categories/><li class=mobile-menu-item>Categories</li></a></ul></nav><div class=container id=mobile-panel><header id=header class=header><div class=logo-wrapper><a href=/crab2313.github.io/ class=logo>crab2313's blog</a></div><nav class=site-navbar><ul id=menu class=menu><li class=menu-item><a class=menu-item-link href=crab2313.github.io/>Home</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/post/>Archives</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/tags/>Tags</a></li><li class=menu-item><a class=menu-item-link href=crab2313.github.io/categories/>Categories</a></li></ul></nav></header><main id=main class=main><div class=content-wrapper><div id=content class=content><article class=post><header class=post-header><h1 class=post-title>PCI驱动框架分析</h1><div class=post-meta><span class=post-time>2020-02-19</span></div></header><div class=post-toc id=post-toc><h2 class=post-toc-title>文章目录</h2><div class="post-toc-content always-active"><nav id=TableOfContents><ul><li><a href=#pci>PCI</a><ul><li><a href=#acpi下对pci总线的枚举操作>ACPI下对PCI总线的枚举操作</a></li><li><a href=#host-bridge管理>Host Bridge管理</a></li><li><a href=#通用控制器驱动分析>通用控制器驱动分析</a></li></ul></li></ul></nav></div></div><div class=post-content><h1 id=pci>PCI</h1><p>分析流程：</p><ul><li>硬件文档</li><li>PCI框架核心层</li><li>PCI框架热插拔</li><li>vfio</li><li>iommu</li><li>vfio接口层与用户态使用cloud-hypervisor</li></ul><p>一共十一万行代码。</p><p>从ACPI的codepath开始看吧，比较熟悉一点。首先是找到初始化函数，<code>acpi_pci_init</code>。可以看到该函数首先从FADT中的boot_flags标志里检查两个标志：</p><table><thead><tr><th>flags</th><th>desc</th></tr></thead><tbody><tr><td>ACPI_FADT_NO_MSI</td><td>表示不支持MSI</td></tr><tr><td>ACPI_FADT_NO_ASPM</td><td>表示不支持高级电源管理</td></tr></tbody></table><h2 id=acpi下对pci总线的枚举操作>ACPI下对PCI总线的枚举操作</h2><p>ACPI的Definition Block中使用<code>PNP0A03</code>表示一个PCI Host Bridge。有关ACPI的知识就不提了，这里只总结机制，剩下的交给ACPI的Spec。在内核代码简单搜索即可发现对于PCI Host Bridge的处理在<code>drivers/acpi/pci_root.c</code>文件中。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>static</span> <span class=k>const</span> <span class=k>struct</span> <span class=n>acpi_device_id</span> <span class=n>root_device_ids</span><span class=p>[]</span> <span class=o>=</span> <span class=p>{</span>
+	<span class=p>{</span><span class=s>&#34;PNP0A03&#34;</span><span class=p>,</span> <span class=mi>0</span><span class=p>},</span>
+	<span class=p>{</span><span class=s>&#34;&#34;</span><span class=p>,</span> <span class=mi>0</span><span class=p>},</span>
+<span class=p>};</span>
+
+<span class=k>static</span> <span class=k>struct</span> <span class=n>acpi_scan_handler</span> <span class=n>pci_root_handler</span> <span class=o>=</span> <span class=p>{</span>
+	<span class=p>.</span><span class=n>ids</span> <span class=o>=</span> <span class=n>root_device_ids</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>attach</span> <span class=o>=</span> <span class=n>acpi_pci_root_add</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>detach</span> <span class=o>=</span> <span class=n>acpi_pci_root_remove</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>hotplug</span> <span class=o>=</span> <span class=p>{</span>
+		<span class=p>.</span><span class=n>enabled</span> <span class=o>=</span> <span class=nb>true</span><span class=p>,</span>
+		<span class=p>.</span><span class=n>scan_dependent</span> <span class=o>=</span> <span class=n>acpi_pci_root_scan_dependent</span><span class=p>,</span>
+	<span class=p>},</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>TODO： 这里留存有疑点，即内核中是如何处理<code>_HID</code>和<code>_CID</code>的关系的。PCIE Host Bridge一般将<code>_CID</code>设置成<code>PNP0A03</code>。</p><p>因此可以发现这里进行设备枚举的代码即为<code>acpi_pci_root_add</code>函数。函数首先通过<code>_SEG</code>确定该PCI Host bridge的segment group。随后通过<code>_CRS</code>里的BusRange类型资源取得该Host Bridge的Secondary总线范围，保存在<code>root->secondary</code>这个resource中。然后设置基本属性：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>root</span><span class=o>-&gt;</span><span class=n>device</span> <span class=o>=</span> <span class=n>device</span><span class=p>;</span>
+	<span class=n>root</span><span class=o>-&gt;</span><span class=n>segment</span> <span class=o>=</span> <span class=n>segment</span> <span class=o>&amp;</span> <span class=mh>0xFFFF</span><span class=p>;</span>
+	<span class=n>strcpy</span><span class=p>(</span><span class=n>acpi_device_name</span><span class=p>(</span><span class=n>device</span><span class=p>),</span> <span class=n>ACPI_PCI_ROOT_DEVICE_NAME</span><span class=p>);</span>
+	<span class=n>strcpy</span><span class=p>(</span><span class=n>acpi_device_class</span><span class=p>(</span><span class=n>device</span><span class=p>),</span> <span class=n>ACPI_PCI_ROOT_CLASS</span><span class=p>);</span>
+	<span class=n>device</span><span class=o>-&gt;</span><span class=n>driver_data</span> <span class=o>=</span> <span class=n>root</span><span class=p>;</span>
+</code></pre></td></tr></table></div></div><p><code>_CBA</code>对象中可以保存这个PCI Host Bridge的用于MMCONFIG枚举的基址：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c>	<span class=n>root</span><span class=o>-&gt;</span><span class=n>mcfg_addr</span> <span class=o>=</span> <span class=n>acpi_pci_root_get_mcfg_addr</span><span class=p>(</span><span class=n>handle</span><span class=p>)</span>
+</code></pre></td></tr></table></div></div><p>TODO _OSC</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-fallback data-lang=fallback>	negotiate_os_control(root, &amp;no_aspm);
+</code></pre></td></tr></table></div></div><p>随后，调用<code>pci_acpi_scan_root</code>函数枚举这个Host Bridge上的设备。该函数是一个平台相关的函数，即各个平台独立实现了该函数，下面分析ARM64平台下的实现。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>pci_ecam_ops</span> <span class=n>pci_generic_ecam_ops</span> <span class=o>=</span> <span class=p>{</span>
+	<span class=p>.</span><span class=n>bus_shift</span>	<span class=o>=</span> <span class=mi>20</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>pci_ops</span>	<span class=o>=</span> <span class=p>{</span>
+		<span class=p>.</span><span class=n>map_bus</span>	<span class=o>=</span> <span class=n>pci_ecam_map_bus</span><span class=p>,</span>
+		<span class=p>.</span><span class=n>read</span>		<span class=o>=</span> <span class=n>pci_generic_config_read</span><span class=p>,</span>
+		<span class=p>.</span><span class=n>write</span>		<span class=o>=</span> <span class=n>pci_generic_config_write</span><span class=p>,</span>
+	<span class=p>}</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><h2 id=host-bridge管理>Host Bridge管理</h2><h2 id=通用控制器驱动分析>通用控制器驱动分析</h2><p>这里分析内核中实现的通用控制器驱动，该驱动通过ECAM实现对设备的枚举，在ARM中比较常用。该驱动一般通过设备树进行配置，其设备树bingding位于<code>bindings/pci/host-generic-pci.txt</code>文件中。</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>pci_ecam_ops</span> <span class=p>{</span>
+	<span class=kt>unsigned</span> <span class=kt>int</span>			<span class=n>bus_shift</span><span class=p>;</span>
+	<span class=k>struct</span> <span class=n>pci_ops</span>			<span class=n>pci_ops</span><span class=p>;</span>
+	<span class=kt>int</span>				<span class=p>(</span><span class=o>*</span><span class=n>init</span><span class=p>)(</span><span class=k>struct</span> <span class=n>pci_config_window</span> <span class=o>*</span><span class=p>);</span>
+<span class=p>};</span>
+
+<span class=k>struct</span> <span class=n>pci_ops</span> <span class=p>{</span>
+	<span class=kt>int</span> <span class=p>(</span><span class=o>*</span><span class=n>add_bus</span><span class=p>)(</span><span class=k>struct</span> <span class=n>pci_bus</span> <span class=o>*</span><span class=n>bus</span><span class=p>);</span>
+	<span class=kt>void</span> <span class=p>(</span><span class=o>*</span><span class=n>remove_bus</span><span class=p>)(</span><span class=k>struct</span> <span class=n>pci_bus</span> <span class=o>*</span><span class=n>bus</span><span class=p>);</span>
+	<span class=kt>void</span> <span class=n>__iomem</span> <span class=o>*</span><span class=p>(</span><span class=o>*</span><span class=n>map_bus</span><span class=p>)(</span><span class=k>struct</span> <span class=n>pci_bus</span> <span class=o>*</span><span class=n>bus</span><span class=p>,</span> <span class=kt>unsigned</span> <span class=kt>int</span> <span class=n>devfn</span><span class=p>,</span> <span class=kt>int</span> <span class=n>where</span><span class=p>);</span>
+	<span class=kt>int</span> <span class=p>(</span><span class=o>*</span><span class=n>read</span><span class=p>)(</span><span class=k>struct</span> <span class=n>pci_bus</span> <span class=o>*</span><span class=n>bus</span><span class=p>,</span> <span class=kt>unsigned</span> <span class=kt>int</span> <span class=n>devfn</span><span class=p>,</span> <span class=kt>int</span> <span class=n>where</span><span class=p>,</span> <span class=kt>int</span> <span class=n>size</span><span class=p>,</span> <span class=n>u32</span> <span class=o>*</span><span class=n>val</span><span class=p>);</span>
+	<span class=kt>int</span> <span class=p>(</span><span class=o>*</span><span class=n>write</span><span class=p>)(</span><span class=k>struct</span> <span class=n>pci_bus</span> <span class=o>*</span><span class=n>bus</span><span class=p>,</span> <span class=kt>unsigned</span> <span class=kt>int</span> <span class=n>devfn</span><span class=p>,</span> <span class=kt>int</span> <span class=n>where</span><span class=p>,</span> <span class=kt>int</span> <span class=n>size</span><span class=p>,</span> <span class=n>u32</span> <span class=n>val</span><span class=p>);</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>从名字可以看出pci_ecam_ops是用于操作ECAM空间的一组函数指针。驱动通过填充这组函数指针，可以向通用代码提供一个统一的操作入口。对于<code>pci-host-ecam-generic</code>来说，其操作定义如下：</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre class=chroma><code class=language-c data-lang=c><span class=k>struct</span> <span class=n>pci_ecam_ops</span> <span class=n>pci_generic_ecam_ops</span> <span class=o>=</span> <span class=p>{</span>
+	<span class=p>.</span><span class=n>bus_shift</span>	<span class=o>=</span> <span class=mi>20</span><span class=p>,</span>
+	<span class=p>.</span><span class=n>pci_ops</span>	<span class=o>=</span> <span class=p>{</span>
+		<span class=p>.</span><span class=n>map_bus</span>	<span class=o>=</span> <span class=n>pci_ecam_map_bus</span><span class=p>,</span>
+		<span class=p>.</span><span class=n>read</span>		<span class=o>=</span> <span class=n>pci_generic_config_read</span><span class=p>,</span>
+		<span class=p>.</span><span class=n>write</span>		<span class=o>=</span> <span class=n>pci_generic_config_write</span><span class=p>,</span>
+	<span class=p>}</span>
+<span class=p>};</span>
+</code></pre></td></tr></table></div></div><p>下面来看进行probe操作的通用函数<code>pci_host_common_probe</code>。事实上这个驱动对于PCI总线一般会进行两个操作：配置与枚举。配置操作即为配置整个PCI总线，分配总线和设备号，而枚举操作即为常规的枚举总线上的设备。在PCI总线已经配置好（如固件配置，或者虚拟机等）的情况下，可以通过chosen节点下配置<code>linux,pci-probe-only</code>让内核跳过配置操作。</p></div><div class=post-copyright><p class=copyright-item><span class=item-title>文章作者</span>
+<span class=item-content>crab2313</span></p><p class=copyright-item><span class=item-title>上次更新</span>
+<span class=item-content>2020-02-19</span></p></div><footer class=post-footer><div class=post-tags><a href=/crab2313.github.io/tags/kernel/>kernel</a>
+<a href=/crab2313.github.io/tags/pci/>pci</a></div><nav class=post-nav><a class=prev href=crab2313.github.io/post/smmu/><i class="iconfont icon-left"></i>
+<span class="prev-text nav-default">SMMU内核驱动分析</span>
+<span class="prev-text nav-mobile">上一篇</span></a>
+<a class=next href=crab2313.github.io/post/kdump/><span class="next-text nav-default">kdump工作机制分析</span>
+<span class="next-text nav-mobile">下一篇</span>
+<i class="iconfont icon-right"></i></a></nav></footer></article></div></div></main><footer id=footer class=footer><div class=social-links><a href=mailto:crab2313@gmail.com class="iconfont icon-email" title=email></a><a href=https://github.com/crab2313 class="iconfont icon-github" title=github></a><a href=https://gitlab.com/crab2313 class="iconfont icon-gitlab" title=gitlab></a><a href=https://space.bilibili.com/1310103 class="iconfont icon-bilibili" title=bilibili></a><a href=crab2313.github.io/index.xml type=application/rss+xml class="iconfont icon-rss" title=rss></a></div><div class=copyright><span class=power-by>由 <a class=hexo-link href=https://gohugo.io>Hugo</a> 强力驱动</span>
+<span class=division>|</span>
+<span class=theme-info>主题 -
+<a class=theme-link href=https://github.com/olOwOlo/hugo-theme-even>Even</a></span>
+<span class=copyright-year>&copy;
+2017 -
+2021<span class=heart><i class="iconfont icon-heart"></i></span><span>crab2313</span></span></div></footer><div class=back-to-top id=back-to-top><i class="iconfont icon-up"></i></div></div><script src=https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/slideout@1.0.1/dist/slideout.min.js integrity="sha256-t+zJ/g8/KXIJMjSVQdnibt4dlaDxc9zXr/9oNPeWqdg=" crossorigin=anonymous></script><script src=https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.1.20/dist/jquery.fancybox.min.js integrity="sha256-XVLffZaxoWfGUEbdzuLi7pwaUJv1cecsQJQqGLe7axY=" crossorigin=anonymous></script><script type=text/javascript src=/crab2313.github.io/js/main.min.c99b103c33d1539acf3025e1913697534542c4a5aa5af0ccc20475ed2863603b.js></script><script type=text/javascript>window.MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']]}}</script><script async src=https://cdn.jsdelivr.net/npm/mathjax@3.0.5/es5/tex-mml-chtml.js integrity="sha256-HGLuEfFcsUJGhvB8cQ8nr0gai9EucOOaIxFw7qxmd+w=" crossorigin=anonymous></script></body></html>
