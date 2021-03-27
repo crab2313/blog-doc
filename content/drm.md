@@ -1,24 +1,46 @@
 +++
 title = "DRM显示框架分析"
-date = 2020-05-24
+date = 2021-03-26
 
 [taxonomies]
 tags = ["kernel", "drm"]
 
 +++
 
-# DRM
+真的没有想到真的有人能看到这篇东西，所以我准备抽出时间把这个东西整理完。本文是我阅读内核DRM子系统的一些随笔，其目的是记录我对内核代码的阅读过程和自己的一些理解，希望景嘉微的大佬们多多指正。
 
-又回来看这个鬼玩意了。
+接触linux桌面比较多的人一定会对DRM这个名字比较熟悉。网上也有大把资料在解释DRM到底是什么。DRM主要分为KMS与Render两大部分，本文实质上是在分析DRM中KMS相关的框架实现。而Render相关的API是特定于驱动的，内核并不为用户态提供一个通用的IOCTL接口。如果后续时间充足，我将会分析一下VC4的Render API，以及相应的用户态实现。从功能上讲，KMS负责搭建显示控制器的pipeline，并控制显示硬件将图像缓冲区scanout到屏幕上，而如何加速生成framebuffer中的内容则是3D引擎（即Render API）负责的事情。
 
-要素：
+对于KMS，有如下要素：
 
 * 显存管理器
 * modesetting API
 * 显示API
-* 驱动初始化
 
-研究案例最好硬件无关，且比较容易懂原理，且能够正常运行：virtio-gpu。
+在研究初期，研究案例最好硬件无关，且比较容易懂原理，且能够正常运行，可以参考virtio-gpu和QXL虚拟显卡。等到对内核DRM子系统有一定的理解后，可以分析简单的显卡硬件，如VC4（树莓派3B的显卡）。
+
+# 阅读路径
+
+需要看的东西有点多，甚至说比较乱。先列举一下：
+
+内核中的内容：
+
+* DRM驱动通用代码：包括GEM，KMS
+* AMD显卡相关的代码：AMDGPU，RADEON，AMDKFD（通用计算ROCM框架内核驱动）
+
+用户态代码：
+
+* MESA： OpenGL state tracker， gallium 3D， vulkan， egl（重点），gbm
+* libdrm：基本为内核提供的IOCTL的wrapper
+
+我想要重点理解的部分：
+
+* context到底是什么？如OpenGL和egl创建的context
+* mesa的架构
+* wayland渲染的基本原理
+* DRI到底由什么构成
+
+这里我觉得还是先从MESA这里着手，毕竟内核驱动缺少文档，且我对接口层到底怎么用还是不是很熟悉。看一下简单的DUMB驱动如何实现也是一个理解KMS比较好的方法。
 
 # GEM
 
@@ -104,38 +126,16 @@ void *gbm_bo_map (struct gbm_bo *bo, uint32_t x, uint32_t y, uint32_t width, uin
 
 可以看到该函数提供了将BO中的特定二维区域映射到功能。
 
-# Path
 
-需要看的东西有点多，甚至说比较乱。先列举一下：
-
-内核中的内容：
-
-* DRM驱动通用代码：包括GEM，KMS
-* AMD显卡相关的代码：AMDGPU，RADEON，AMDKFD（通用计算ROCM框架内核驱动）
-
-用户态代码：
-
-* MESA： OpenGL state tracker， gallium 3D， vulkan， egl（重点），gbm
-* libdrm：基本为内核提供的IOCTL的wrapper
-
-我想要重点理解的部分：
-
-* context到底是什么？如OpenGL和egl创建的context
-* mesa的架构
-* wayland渲染的基本原理
-* DRI到底由什么构成
-
-这里我觉得还是先从MESA这里着手，毕竟内核驱动缺少文档，且我对接口层到底怎么用还是不是很熟悉。看一下简单的DUMP驱动如何实现也是一个理解KMS比较好的方法。
 
 # KMS
 
 主要分为用户态接口的使用，内核提供的框架和通用接口。
 
-## 
-
 KMS将整个显示pipeline抽象成以下几个部分：
 
 * framebuffer
+* plane
 * crtc
 * encoder
 * connector
@@ -199,7 +199,9 @@ Atomic Mode Setting接口在用户态看来，是将原先各个KMS object的状
 
 由于Atomic Mode Setting提供的接口的功能是强于原先的KMS接口的，因此原先的KMS接口可以被Atomic Mode Setting接口实现。KMS Core提供了一些helper函数用以帮助驱动程序作者实现原先的Legacy KMS接口[[1]][1]。
 
-# 驱动接口
+由于Legacy接口注定要扔到历史垃圾箱，后续的所有分析都是以`Atomic Mode Setting`的code path作为基准。
+
+## 驱动接口
 
 驱动实现KMS接口的方式如下：
 
@@ -231,6 +233,37 @@ static const struct drm_mode_config_funcs virtio_gpu_mode_funcs = {
         .atomic_commit = drm_atomic_helper_commit,
 };
 ```
+
+## helper架构
+
+helper架构是我起的名，知道是指什么东西就好。DRM子系统的API比较难抽象，简单来说就是硬件各有各的不同，很多情况下，驱动可以使用一个共同的实现，而在其它情况下，驱动需要提供自己的实现。因此，DRM驱动核心的接口使用了helper架构，其基本思想是通过一组回调函数抽象特定组件的操作，比如`drm_connector_funcs`，同时又使用另外一组helper函数给出了原先那组回调函数的通用实现，让开发最者实现这组helper函数抽象出的回调函数即可。
+
+这样双层的实现即能保证开发者有足够高的自由度（完全不用helper函数），也能简化开发者的开发（使用helper函数），同时提供给开发者hook特定helper函数的能力。下面以`drm_connector`为例说明helper架构的实现与使用方式。
+
+正常情况下，创建`drm_connector`对象时需要提供`struct drm_connector_funcs`回调函数组，而使用helper函数时，可以直接用helper函数填充对应回调函数：
+
+```c
+static const struct drm_connector_funcs vc4_hdmi_connector_funcs = {
+        .detect = vc4_hdmi_connector_detect,
+        .fill_modes = drm_helper_probe_single_connector_modes,
+        .destroy = vc4_hdmi_connector_destroy,
+        .reset = drm_atomic_helper_connector_reset,
+        .atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
+        .atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
+};
+```
+
+事实上helper函数并不万能，只是抽象出了大多数驱动程序应该共享的行为，而特定于硬件的部分，则需要以回调函数的形式提供给helper函数，这个回调函数组由`struct drm_connector_helper_funcs`提供。在创建`drm_connector`时，需要通过`drm_connector_helper_add`函数注册。函数将对应的回调函数对象的地址保存在了`drm_connector`中的`helper_private`指针中，如下：
+
+```c
+static inline void drm_connector_helper_add(struct drm_connector *connector,
+                                            const struct drm_connector_helper_funcs *funcs)
+{
+        connector->helper_private = funcs;
+}
+```
+
+这一套实现位于`include/drm/drm_modeset_helper_vtables.h`中，其他的DRM对象都有类似的实现，可以详细阅读`drm_connector_helper_funcs`的注释，理解其中对应的回调函数的用途。在实现DRM驱动时，helper架构会频繁用到，合理掌握helper函数可以极大简化开发，提升驱动程序的兼容性。
 
 ## CRTC
 
@@ -271,9 +304,256 @@ TODO framebuffer releated operation
 
 [内核文档](https://www.kernel.org/doc/html/latest/gpu/drm-kms.html#plane-abstraction)
 
+plane由`drm_plane`表示，其本质是对显示控制器中scanout硬件的抽象。简单来说，给定一个plane，可以让其与一个framebuffer关联表示进行scanout的数据，同时控制控制scanout时进行的额外操作，比如colorspace的改变，旋转、拉伸等操作。`drm_plane`是与硬件强相关的，显示控制器支持的plane是固定的，其支持的功能也是由硬件决定的。
+
+对于`drm_plane`的分析，我们从其结构体定义入手。首先可以看到，一个plane必须要与一个`drm_deivce`关联，且一个`drm_device`中支持的所有plane都被保存在一个链表中。`drm_plane`中存有一个mask，用以表示该`drm_plane`可以绑定的CRTC。同时`drm_plane`中也保存了一个`format_types`数组，表示该`plane`支持的framebuffer格式。
+
+所有的`drm_plane`必为三种类型之一：
+
+* `Primary` - 主plane，一般控制整个显示器的输出。CRTC必须要有一个这样的plane。
+* `Curosr` - 表示鼠标光标，可选。
+*  `Overlay` - 叠加plane，可以在主plane上叠加一层输出，可选。
+
+来回顾一点历史：内核向用户态导出的接口实际上不包含`Primary Plane`，对应plane的接口只能操作`Cursor Plane`和`Overlay Plane`，后期提供了一个`Universial Plane`特性，使得用户态API可以直接操作`Primary Plane`。在明白这个历史遗留问题后，对`drm_plane`的实现就好理解了。
+
 ## Encoder
 
+## Mode
+
+一般人对mode的理解仅仅是分辨率，这种理解在DRM中是不够的，不足以理解`drm_display_mode`是干什么的。简单来说，mode是一组信号时序，用以驱动显示器正确显示一帧图像。首先能够猜到需要传什么东西给显示器：像素数据。而到底多少个像素就跟显示器的分辨率有关了，如1080p的显示器需要传递`1080 x 1920`个像素。更加具体的形式是一行一行的从左到右发送，由于硬件实现需要，需要额外的步骤对信号进行同步。帧与帧之间被称为vertical，即竖直的，而行与行之间被称为horizontal，即水平的，这直接对应于显示器的横竖方向。
+
+```c
+ *               Active                 Front           Sync           Back
+ *              Region                 Porch                          Porch
+ *     <-----------------------><----------------><-------------><-------------->
+ *       //////////////////////|
+ *      ////////////////////// |
+ *     //////////////////////  |..................               ................
+ *                                                _______________
+ *     <----- [hv]display ----->
+ *     <------------- [hv]sync_start ------------>
+ *     <--------------------- [hv]sync_end --------------------->
+ *     <-------------------------------- [hv]total ----------------------------->*
+```
+
+上面内核注释中的字符画完美的解释了`drm_display_mode`中变量的定义。需要注意的是现实状况中，还有需要其它复杂的显示模式，比如interlaced模式等，所以`drm_display_mode`区分逻辑参数与硬件参数，硬件参数就是真正进行硬件操作时使用的参数，而逻辑参数是为了方便驱动开发人员进行的抽象，`drm_display_mode`根据相应的flag计算出硬件参数。
+
+除了上述直接与硬件相关的参数，`drm_display_mode`还携带了一些DRM相关的属性。比如类型：
+
+```c
+        /**
+         * @type:
+         *
+         * A bitmask of flags, mostly about the source of a mode. Possible flags
+         * are:
+         *
+         *  - DRM_MODE_TYPE_PREFERRED: Preferred mode, usually the native
+         *    resolution of an LCD panel. There should only be one preferred
+         *    mode per connector at any given time.
+         *  - DRM_MODE_TYPE_DRIVER: Mode created by the driver, which is all of
+         *    them really. Drivers must set this bit for all modes they create
+         *    and expose to userspace.
+         *  - DRM_MODE_TYPE_USERDEF: Mode defined via kernel command line
+         */
+		unsigned int type;
+```
+
+可以看到mode的两个来源：驱动创建和内核命令行自行定义。而`DRM_MODE_TYPE_PREFERRED`标记的`drm_display_mode`则一般为对应connector的native mode。除此之外一个比较重要的属性就是status：
+
+```c
+        /**
+         * @status:
+         *
+         * Status of the mode, used to filter out modes not supported by the
+         * hardware. See enum &drm_mode_status.
+         */
+        enum drm_mode_status status;
+```
+
+该属性直接标记该mode是否可以被硬件接受，如果不行，则会标注出具体原因。对应显示器的长宽一般会由`width_mm`和`height_mm`记录，单位是毫米。最后注意`drm_display_mode`一般与`drm_connector`关联，因此`drm_modes.c`中提供了相应的helper函数，比如：
+
+```c
+void drm_mode_probed_add(struct drm_connector *connector,
+                         struct drm_display_mode *mode)
+{
+        WARN_ON(!mutex_is_locked(&connector->dev->mode_config.mutex));
+
+        list_add_tail(&mode->head, &connector->probed_modes);
+}
+```
+
+`drm_mode_probed_add`函数将该mode添加到一个connector的管理中。注意probed_modes列表中可能包含了许多硬件无法使用的mode，对于这样的一个列表，可以使用`drm_mode_prune_invalid`将其中非法的mode清除。
+
 ## Connector
+
+首先明确connector抽象了什么东西。从内核文档的描述中可以明白，connector抽象的是一个**能够显示像素的设备**，从流媒体的角度来说，就是一个sink，是最终的图像输出的地方。或者更加具象的理解一下，字面意思就是显卡上面的接头，比如HDMI，DP等接头。connector由`struct drm_connector`进行表示，并定义在`include/drm/drm_connector.h`中，接下来就分析其相关实现。
+
+首先从该结构体的定义下手，可以看到结构体定义开始比较长的，先从常规部分下手：
+
+```c
+struct drm_connector {
+        /** @dev: parent DRM device */
+        struct drm_device *dev;
+        /** @kdev: kernel device for sysfs attributes */
+        struct device *kdev;
+        /** @attr: sysfs attributes */
+        struct device_attribute *attr;
+		.......
+```
+
+很明显，从这里看出，内核认为`struct drm_connector`是sysfs树形结构的一员，翻译一下，就是一个`struct drm_connector`对象会对应`/sys`目录下的某个子文件夹（节点）。有关该文件夹中相关的属性文件可以后续进行分析。
+
+接下来可以看到明白一个`drm_device`中的所有connector都会被保存在一个链表中，进行管理，且`drm_connector`是一个`drm_mode_object`：
+
+```c
+        /**
+         * @head:
+         *
+         * List of all connectors on a @dev, linked from
+         * &drm_mode_config.connector_list. Protected by
+         * &drm_mode_config.connector_list_lock, but please only use
+         * &drm_connector_list_iter to walk this list.
+         */
+        struct list_head head;
+
+        /** @base: base KMS object */
+        struct drm_mode_object base;
+```
+
+从这里之后，与`drm_connector`相关的分析主要以逻辑功能进行划分，而不应采取线性分析的方式。每一个`drm_connector`都应该定义一个类型，并保存在`drm_connector`中：
+
+```c
+        /**
+         * @connector_type:
+         * one of the DRM_MODE_CONNECTOR_<foo> types from drm_mode.h
+         */
+        int connector_type;
+        /** @connector_type_id: index into connector type enum */
+        int connector_type_id;
+```
+
+内核支持的`drm_connector`类型是uapi的一部分，定义在`include/uapi/drm/drm_mode.h`中：
+
+```c
+#define DRM_MODE_CONNECTOR_Unknown      0
+#define DRM_MODE_CONNECTOR_VGA          1
+#define DRM_MODE_CONNECTOR_DVII         2
+#define DRM_MODE_CONNECTOR_DVID         3
+#define DRM_MODE_CONNECTOR_DVIA         4
+#define DRM_MODE_CONNECTOR_Composite    5
+#define DRM_MODE_CONNECTOR_SVIDEO       6
+#define DRM_MODE_CONNECTOR_LVDS         7
+#define DRM_MODE_CONNECTOR_Component    8
+#define DRM_MODE_CONNECTOR_9PinDIN      9
+#define DRM_MODE_CONNECTOR_DisplayPort  10
+#define DRM_MODE_CONNECTOR_HDMIA        11
+#define DRM_MODE_CONNECTOR_HDMIB        12
+#define DRM_MODE_CONNECTOR_TV           13
+#define DRM_MODE_CONNECTOR_eDP          14
+#define DRM_MODE_CONNECTOR_VIRTUAL      15
+#define DRM_MODE_CONNECTOR_DSI          16
+#define DRM_MODE_CONNECTOR_DPI          17
+#define DRM_MODE_CONNECTOR_WRITEBACK    18
+```
+
+很明显，connector驱动在初始化一个connector的时候应该设置connector的类型。与其他的drm对象类似，`drm_connector`的创建者需要提供一组回调函数，由于实现connector需要支持的一组操作：
+
+```c
+        /** @funcs: connector control functions */
+        const struct drm_connector_funcs *funcs;
+```
+
+### drm_helper_probe_single_connector_modes
+
+函数是一个helper，用于提供默认的`drm_connector_funcs->fill_modes`实现。本质上函数实现了对connector支持的`drm_display_mode`的扫描。从函数的注释中，可以看到函数进行的操作大致为：
+
+1. 将connector中现有`modes`列表中的`drm_display_mode`全部标记为`MODE_STALE`状态
+2. 从以下三个来源收集`drm_display_mode`，并使用`drm_mode_probed_add`函数添加到`probed_list`中：
+   * &drm_connector_helper_funcs.get_modes回调函数
+   * 如果`drm_connector`目前已经连接，则加入VESA标准DMT模式`1024 x 768`（这个就是VGA接口没插稳检测不到EDID时分辨率变`1024x768`的原因了吧）
+   * 从内核命令行参数`video=`读取并生成`drm_display_mode`
+3. 将probed_list中的`drm_display_mode`移动到`modes`列表中，并合并冲突项
+4. 验证非STALE状态`drm_display_mode`的合法性
+5. 将所有非法的`drm_display_mode`从`modes`列表中删除
+
+### hotplug检测
+
+`drm_connector`支持hotplug且DRM中提供了相应的helper，简化实现。目前主要的helper有：
+
+* drm_kms_helper_poll_init()用于提供轮询检测支持
+* drm_helper_hpd_irq_event()用于提供中断检测支持
+
+下面就来分析DRM对于轮询检测的helper实现。可以看到，该helper的实现非常简单，其基本原理是创建一个delayed_work并使能：
+
+```c
+void drm_kms_helper_poll_init(struct drm_device *dev)
+{
+        INIT_DELAYED_WORK(&dev->mode_config.output_poll_work, output_poll_execute);
+        dev->mode_config.poll_enabled = true;
+
+        drm_kms_helper_poll_enable(dev);
+}
+```
+
+而`drm_kms_helper_poll_enable`函数很明显就是用于重置并使能这个delayed_work。注意这个函数的调用参数为`drm_device`，也就是这个机制整个就是应用于一个`drm_device`的。在分析这个函数之前，可以发现一个模块参数`drm.poll`，用于控制轮询的行为：
+
+```c
+static bool drm_kms_helper_poll = true;
+module_param_named(poll, drm_kms_helper_poll, bool, 0600);
+```
+
+`drm_kms_helper_poll_enable`函数首先检查是否能够开启轮询模式，条件如下：
+
+```c
+        if (!dev->mode_config.poll_enabled || !drm_kms_helper_poll)
+                return;
+```
+
+也就是说，`drm.poll`模块参数可以直接影响轮询的行为。随后函数遍历所有的`drm_connector`，然后决定是否需要进行轮询：
+
+```c
+        drm_connector_list_iter_begin(dev, &conn_iter);
+        drm_for_each_connector_iter(connector, &conn_iter) {
+                if (connector->polled & (DRM_CONNECTOR_POLL_CONNECT |
+                                         DRM_CONNECTOR_POLL_DISCONNECT))
+                        poll = true;
+        }
+        drm_connector_list_iter_end(&conn_iter);
+```
+
+这里注意到`drm_connector.polled`字段，它表示一个`drm_connector`的轮询模式，是一个bitflag，有如下三位：
+
+```c
+         * DRM_CONNECTOR_POLL_HPD
+         *     The connector generates hotplug events and doesn't need to be
+         *     periodically polled. The CONNECT and DISCONNECT flags must not
+         *     be set together with the HPD flag.
+         *
+         * DRM_CONNECTOR_POLL_CONNECT
+         *     Periodically poll the connector for connection.
+         *
+         * DRM_CONNECTOR_POLL_DISCONNECT
+         *     Periodically poll the connector for disconnection, without
+         *     causing flickering even when the connector is in use. DACs should
+         *     rarely do this without a lot of testing.
+```
+
+简单来说就是检测所有的`drm_connector`中是否有需要轮询检测状态的，如果有则开启轮询。函数最后根据检测的结果打开轮询：
+
+```c
+        if (poll)
+                schedule_delayed_work(&dev->mode_config.output_poll_work, delay);
+```
+
+默认情况下，第一次进行轮询的delay为1秒，否则为10秒：
+
+```c
+#define DRM_OUTPUT_POLL_PERIOD (10*HZ)
+```
+
+前面看到delayed_work的回调函数为`output_poll_execute`，函数的实现还是比较简单的。函数遍历`drm_device`所有的`drm_connector`，然后找到需要进行轮询的设备，并调用`drm_helper_probe_detect`检测这个`drm_connector`的状态。而`drm_helper_probe_detect`仅仅是调用了`drm_connector_helper_funcs`中注册的`detect_ctx`和`detect`回调函数。
+
+对于支持中断的`drm_connector`，如果它是粗粒度的，即无法判断哪一个`drm_connector`状态发生了改变，则驱动开发者可以在进程上下文调用`drm_helper_hpd_irq_event`函数，检测所有标记了`DRM_CONNECTOR_POLL_HPD`的`drm_connector`。反之，则开发这可以自行调用`drm_kms_helper_hotplug_event`函数处理该事件。`drm_kms_helper_hotplug_event`的主要行为是发送uevent到用户态，并调用`dev->mode_config.funcs->output_poll_changed`回调函数。
 
 ## 用户态调用路径
 
