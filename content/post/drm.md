@@ -611,6 +611,16 @@ DRM_IOCTL_DEF(DRM_IOCTL_MODE_ATOMIC, drm_mode_atomic_ioctl, DRM_MASTER),
 4. 申请一个新的atomic_mode_state，将用户态传入的property拷贝并设置到新的state上
 5. 最后根据flags中是否允许阻塞调用`drm_atomic_commit`或者`drm_atomic_nonblocking_commit`函数
 
+## VBlank处理
+
+前面分析`drm_mode`时大致理解了vsync等相关信号，从原理上讲vblank是指上一帧画面scanout完毕后到下一帧画面开始scanout这两个时间节点之间的“空档期（blank）”。一般情况下，可以在这个空档期进行一些常规的操作，比如控制硬件更换scanout的framebuffer，在比较老的不支持page flip的硬件上，会要求在vblank时间段内完成framebuffer的重新绘制。目前的显示控制器一般会实现vblank中断，即显示控制器进入vblank时，会触发相应的中断，而DRM框架则提供了相应的helper帮助驱动程序对vblank机制进行处理。
+
+从`drm_vblank.c`开头的注释可以知道，DRM框架对于驱动支持vblank的最小要求就是通过`drm_vblank_init`函数初始化vblank处理代码，然后在`drm_crtc_funcs`中实现`enable_vblank`和`disable_vblank`回调函数。最后在vblank的中断处理函数中调用`drm_crtc_handle_vblank`函数完成vblank的处理。
+
+从`drm_vblank_init`函数中可以看到，DRM框架以CRTC为单位处理vblank，且为每一个CRTC创建了一个对应的`drm_vblank_crtc`对象，保存在`drm_device->vblank`数组中。DRM框架实现了一个比较精巧的机制，可以根据系统中是否有vblank事件的用户动态地开启和关闭vblank中端。而前面的`enable_vblank`和`disable_vblank`回调函数即为硬件填充的中断使能开关。为了追踪系统中vblank事件的用户，DRM框架采用引用计数的方式追踪当前vblank事件的用户数量。如果一个用户要求接收vblank事件，则可以调用`drm_crtc_vblank_get`，没有需要后，则可调用`drm_crtc_vblank_put`函数，降低引用计数。DRM框架根据引用计数是否为0决定是否使能vblank中断。注意引用计数为0时，DRM框架不会立即关闭中断，而是设置一个定时器，默认为5秒，超时后关闭vblank中断，这个等待事件可以通过DRM模块的模块参数进行配置。
+
+用户态可以通过`drmWaitVBlank`函数等待特定的vblank事件，这个操作通过一个wait_queue实现，进程将自己注册到`wait_queue`上等待唤醒。而`drm_crtc_handle_vblank`函数则会唤醒这个`wait_queue`。最后提一句，`drmWaitVBlank`函数可以通过特定flag要求发生vblank事件后直接返回特定的DRM event给用户态的drm文件描述符。该行为通过`drm_device->vblank_event_list`实现。
+
 ## State对象
 
 state是什么？这里的state是DRM框架用来追踪显示pipeline各个组件状态的状态集合。一个DRM显示pipeline的整体状态由`struct drm_atomic_state`表示：
