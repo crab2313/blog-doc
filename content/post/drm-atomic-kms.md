@@ -208,13 +208,113 @@ int drm_atomic_commit(struct drm_atomic_state *state)
         }
 ```
 
-在非异步模式下，函数首先调用`drm_atomic_helper_setup_commit`。
+在非异步模式下，函数首先调用`drm_atomic_helper_setup_commit`做一些合法性检查并且创建`drm_crtc_commit`，该函数在后面进行分析。随后函数初始化`state->commit_work`，后续相应操作可能放到`workqueue`中完成。
+
+函数最后调用`drm_atomic_helper_prepare_planes`对所有的state中新出现的plane依次调用其helper中的`prepare_fb`回调函数。对于非阻塞的情况，调用`drm_atomic_helper_wait_for_fences`进行等待操作，后面分析。最后调用软件层核心的`drm_atomic_helper_swap_state`函数将新的状态更新到旧的状态，注意这里是软件层面的更新，单纯的是修改state对象。
+
+如果函数调用时使用非阻塞模式，则直接调度起workqueue执行后续操作，反之则直接调用`commit_tail`函数，如下：
+
+```c
+        if (nonblock)
+                queue_work(system_unbound_wq, &state->commit_work);
+        else
+                commit_tail(state);
+```
+
+实际上`state->commit_work`的处理函数也是直接调用`commit_tail`：
+
+```c
+static void commit_work(struct work_struct *work)
+{
+        struct drm_atomic_state *state = container_of(work,
+                                                      struct drm_atomic_state,
+                                                      commit_work);
+        commit_tail(state);
+}
+```
+
+而`commit_tail`的实现用到了多个helper，现在简单将其贴出来，然后逐个分析各个helper。
+
+```c
+static void commit_tail(struct drm_atomic_state *old_state)
+{
+        struct drm_device *dev = old_state->dev;
+        const struct drm_mode_config_helper_funcs *funcs;
+
+        funcs = dev->mode_config.helper_private;
+
+        drm_atomic_helper_wait_for_fences(dev, old_state, false);
+
+        drm_atomic_helper_wait_for_dependencies(old_state);
+
+        if (funcs && funcs->atomic_commit_tail)
+                funcs->atomic_commit_tail(old_state);
+        else
+                drm_atomic_helper_commit_tail(old_state);
+
+        drm_atomic_helper_commit_cleanup_done(old_state);
+
+        drm_atomic_state_put(old_state);
+}
+```
 
 ### drm_atomic_helper_setup_commit
 
-TODO: 基本看懂，但是我需要了解drm event机制，看完再回来写
+函数首先遍历所有状态发生改变的`CRTC`，然后对其创建`drm_crtc_commit`，前面看到这个对象是对Commit操作的进度进行追踪用的。创建之后的`drm_crtc_commit`就保存在`new_crtc_state->commit`中。之后函数会调用`stall_checks`检查当前的commit队列中是否有停滞的commit：
 
-在阻塞情况下，函数会直接调用`drm_mode_config_helpers->atomic_commit_tail`函数。A-KMS中实现了一个标准的helper：`drm_atomic_helper_commit_tail`。而该helper又由更多的helper组成，因此想要真正理解A-KMS中commit操作的大致流程，需要分析这些helper实现的功能及调用的约定。
+```c
+        list_for_each_entry(commit, &crtc->commit_list, commit_entry) {
+                if (i == 0) {
+                        completed = try_wait_for_completion(&commit->flip_done);
+                        /* Userspace is not allowed to get ahead of the previous
+                         * commit with nonblocking ones. */
+                        if (!completed && nonblock) {
+                                spin_unlock(&crtc->commit_lock);
+                                return -EBUSY;
+                        }
+                } else if (i == 1) {
+                        stall_commit = drm_crtc_commit_get(commit);
+                        break;
+                }
+
+                i++;
+        }
+        spin_unlock(&crtc->commit_lock);
+```
+
+从逻辑上来看，从commit队列中取下第一个`drm_commit`，然后检查其`flip_done`的`completion`是否已经被完成了。如果没有完成，且运行`drm_atomic_helper_commit`时为为非阻塞模式（`nonblock`参数为true），则直接让整次commit操作返回`-EBUSY`。随后，取下第二个`drm_commit`（如果存在的话），并认为其为stall的，直接以10秒为timeout等待其`cleanup_done`完成。
+
+函数接下来做了两个简单的优化：
+
+```c
+                /* Drivers only send out events when at least either current or
+                 * new CRTC state is active. Complete right away if everything
+                 * stays off. */
+                if (!old_crtc_state->active && !new_crtc_state->active) {
+                        complete_all(&commit->flip_done);
+                        continue;
+                }
+
+                /* Legacy cursor updates are fully unsynced. */
+                if (state->legacy_cursor_update) {
+                        complete_all(&commit->flip_done);
+                        continue;
+                }
+```
+
+新旧两个状态的CRTC都为关闭状态时肯定flip_done是直接完成的。且使用Legacy Cursor相关的API时，因为这个API本身就不同步，所以可以直接视为完成了`flip_done`。随后函数为每个CRTC创建`drm_pending_event`并放入`new_crtc_state->event`中，注意新创建的`drm_pending_event`的`completion`指针直接指向前面创建的`drm_commit->flip_event`，也就是这个`drm_pending_event`进行处理的时候，会直接完成相应的`flip_done`。
+
+### drm_atomic_helper_wait_for_fences
+
+前面多次见到了这个函数，现在来分析这个函数在等什么东西。可以看到，这个函数对于所有的新状态涉及的plane都会依次对`new_plane_state->fence`调用`dma_wait_fence`。也就是单纯研究这个函数没有什么意义，需要结合plane相关的实现进行分析。
+
+### drm_atomic_helper_wait_for_dependencies
+
+该函数依次对本次commit的旧状态，即原先的状态对应的commit（将显示控制器置成oldstate的commit）中相应的事件进行等待。简单来说，就是等待`old_{crtc,plane,connector}_state->commit` 上的`hw_done`和`flip_done`。
+
+### drm_atomic_helper_commit_tail
+
+前面看到`commit_tail`中调用了`drm_cmode_config_helpers->atomic_commit_tail`回调函数，在其为空的情况下，则直接调用`drm_atomic_helper_commit_tail`。
 
 ```c
 void drm_atomic_helper_commit_tail(struct drm_atomic_state *old_state)
@@ -222,70 +322,11 @@ void drm_atomic_helper_commit_tail(struct drm_atomic_state *old_state)
         struct drm_device *dev = old_state->dev;
 
         drm_atomic_helper_commit_modeset_disables(dev, old_state);
-
         drm_atomic_helper_commit_planes(dev, old_state, 0);
-
         drm_atomic_helper_commit_modeset_enables(dev, old_state);
-
         drm_atomic_helper_fake_vblank(old_state);
-
         drm_atomic_helper_commit_hw_done(old_state);
-
         drm_atomic_helper_wait_for_vblanks(dev, old_state);
-
         drm_atomic_helper_cleanup_planes(dev, old_state);
 }
 ```
-
-### drm_atomic_helper_commit_modeset_disables
-
-该helper的作用是关闭所有的
-
-TODO: check_only
-
-## Atomic Modeset Helper函数分析
-
-### 架构
-
-1. 去libdrm里找找看A-KMS的IOCTL接口与legacy到底有什么不同没有
-2. 假设有不同，那么IOCTL就是有两套接口。对于legacy接口，走原先legacy那套，其对应callback由Atomic Modeset Helper函数实现。对于A-KMS接口，其对应接口也由对应Helper实现。也就是说，Helper是框架中的一部分。
-3. 现在已经都是用新的A-KMS接口了，我认为legacy不用花大功夫去分析。
-
-整体架构为：
-
-* 原先legacy的callback保留，但是基本由A-KMS提供的公共helper实现
-* 公共helper依赖与对应KMS object中保存的private_helper实现功能
-* 驱动程序在注册KMS object时必须初始化legacy callback和private_helper，否则无法正常工作
-
-以CRTC举例，如下：
-
-```c
-static const struct drm_crtc_funcs virtio_gpu_crtc_funcs = {
-        .set_config             = drm_atomic_helper_set_config,
-        .destroy                = drm_crtc_cleanup,
-
-        .page_flip              = drm_atomic_helper_page_flip,
-        .reset                  = drm_atomic_helper_crtc_reset,
-        .atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
-        .atomic_destroy_state   = drm_atomic_helper_crtc_destroy_state,
-};
-
-static const struct drm_crtc_helper_funcs virtio_gpu_crtc_helper_funcs = {
-        .mode_set_nofb = virtio_gpu_crtc_mode_set_nofb,
-        .atomic_check  = virtio_gpu_crtc_atomic_check,
-        .atomic_flush  = virtio_gpu_crtc_atomic_flush,
-        .atomic_enable = virtio_gpu_crtc_atomic_enable,
-        .atomic_disable = virtio_gpu_crtc_atomic_disable,
-};
-
-static int vgdev_output_init(struct virtio_gpu_device *vgdev, int index)
-{
-        // ......
-        drm_crtc_init_with_planes(dev, crtc, primary, cursor,
-                                  &virtio_gpu_crtc_funcs, NULL);
-        drm_crtc_helper_add(crtc, &virtio_gpu_crtc_helper_funcs);
-        // ......
-}
-```
-
-
