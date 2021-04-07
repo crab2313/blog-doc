@@ -1,11 +1,7 @@
 +++
 title = "Clutter代码分析"
 date = 2020-10-19
-draft = true
-
-
 tags = ["gnome", "clutter", "mutter"]
-
 +++
 
 本文尝试分析Clutter代码实现，其目的是获取调试Mutter代码bug的能力。Clutter的基本知识可以从网络获取，后面会贴一些基础文档。Clutter是mutter的基本组成部件，如果不能正确理解clutter，那么就无法理解mutter对屏幕进行的绘制。
