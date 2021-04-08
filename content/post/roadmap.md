@@ -23,3 +23,9 @@ tags = []
   * 设计自己的RISC-V CPU软核
 * 系统整体设计相关的书籍。
 
+## 短期阅读计划
+
+* ACPI EC驱动以及相关标准。原因：突然拿到一本EC相关的手册和实际设计的原理图，对应机器还能在京东买到。
+* 编译原理。原因：系统学习编译器设计。
+* BPF performance tools。原因：无意中和我弟在图书大厦看见这本，有了兴趣。
+* System Performance。原因：BPF performance tools的作者的另外一本书，作者一同推荐了。
