@@ -8,7 +8,7 @@ tags = ["kernel", "iommu", "arm"]
 
 # IOMMU核心框架层
 
-IOMMU核心框架是管理IOMMU设备的一个通过框架，IOMMU设备通过实现特定的回调函数并将自身注册到IOMMU核心框架中，以此通过IOMMU核心框架提供的API向整个内核提供IOMMU功能。所有的IOMMU设备都嵌入了一个`struct iommu_device`，iommu的核心代码只会操作这个结构体。可以看到，我们唯一需要关心的就是ops，这是iommu驱动注册到core中的回调函数。:
+IOMMU核心框架是管理IOMMU设备的一个通用框架，IOMMU设备通过实现特定的回调函数并将自身注册到IOMMU核心框架中，以此通过IOMMU核心框架提供的API向整个内核提供IOMMU功能。所有的IOMMU设备都嵌入了一个`struct iommu_device`，iommu的核心代码只会操作这个结构体。可以看到，我们唯一需要关心的就是ops，这是iommu驱动注册到core中的回调函数。:
 
 ```c
 struct iommu_device {
@@ -64,7 +64,7 @@ static DEFINE_SPINLOCK(iommu_device_lock);
 
 ## iommu_domain_alloc
 
-在我的理解中，domain这个词是从intel的VT-d文档中继承下来的，其他平台有各自的叫法如ARM下叫context。一个domain应该是指一个独立的iommu映射上下文。处于同一个domain中的设备使用同一套映射做地址转换（对于mmio来说就是独立的页表）。core层中使用`struct iommu_domain`表示一个domain：
+在我的理解中，domain这个词是从intel的VT-d文档中继承下来的，其他平台有各自的叫法，比如ARM下叫context。一个domain应该是指一个独立的iommu映射上下文。处于同一个domain中的设备使用同一套映射做地址转换（对于mmio来说就是独立的页表）。core层中使用`struct iommu_domain`表示一个domain：
 
 ```c
 struct iommu_domain {
