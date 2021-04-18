@@ -1,7 +1,6 @@
 +++
 title = "Linux内核在RISC-V架构下的spinlock实现"
-date = 2020-08-20
-draft = true
+date = 2021-04-18
 
 
 tags = ["kernel", "risc-v"]
@@ -9,6 +8,12 @@ tags = ["kernel", "risc-v"]
 +++
 
 本文分析linux内核下对于spinlock的实现，具体到RISC-V体系结构。由于RISC-V体系结构下目前只是简单的实现了一个基于TAS的最基本的spinlock，本文的另一个附加任务就是分析Linux内核为各个平台下实现spinlock搭建起来的通用框架。
+
+这部分内容实质上与体系结构非常相关，属于非常底层的实现，了解这部分内容之前，建议：
+
+* 阅读RISC-V体系结构的A扩展，理解RISC-V体系结构提供的硬件支持
+* 阅读多线程相关书籍，我认为讲的非常好的一本是《Shared Memory Synchronization》作者是`Michael  L. Scott`
+* 理解内存模型与缓存一致性的实现
 
 ## 基本入口分析
 
@@ -219,3 +224,54 @@ static inline unsigned long __raw_spin_lock_irqsave(raw_spinlock_t *lock)
 ```
 
 事实上，这套实现与lockdep框架深度集成。
+
+## RISC-V的实现
+
+目前RISC-V用的这套实现是相当简单的，基本就是拍脑门就能想出来的。内核中稍有复杂度的实现为ticket-based spinlock和queue spinlock，日后RISC-V采用了这些实现之后，可以进行分析。使用这个简单实现的spinlock，是因为目前的RISC-V处理器的实现似乎都是低性能，且核心数较少的实现，不需要过度考虑性能已经公平性带来的影响。相信后面RISC-V应用于PC或者服务器系统时，会采用高性能的qspinlock实现。
+
+RISC-V实现的spinlock本质上是一个基于TAS（Test and Set）的spinlock，利用到了RISC-V提供的硬件源自操作指令。因此这个锁的定义是相当简单的，本质上就是一个整数：
+
+```c
+typedef struct {
+        volatile unsigned int lock;
+} arch_spinlock_t;
+
+#define __ARCH_SPIN_LOCK_UNLOCKED       { 0 }
+```
+
+当lock为0时，表示这个锁是可用的。
+
+### arch_spin_lock
+
+该函数相当简单：
+
+```c
+static inline void arch_spin_lock(arch_spinlock_t *lock)
+{
+        while (1) {
+                if (arch_spin_is_locked(lock))
+                        continue;
+
+                if (arch_spin_trylock(lock))
+                        break;
+        }
+}
+```
+
+不过理解为什么这么写性能有优势则需要理解缓存的MESI协议。MESI协议中，一个内存位置的属性可以为E或者S，很明显将一个内存位置设置为E（Exclusive）的开销远远大于将其设置为S（Shared）的开销。因此函数中首先使用`arch_spin_is_locked`检测这个整数的值，如下：
+
+```c
+#define arch_spin_is_locked(x)  (READ_ONCE((x)->lock) != 0)
+```
+
+此时仅仅是请求其进入S状态，如果发现没有人已经拿到了该锁，才会正式使用原子指令对该内存地址进行E状态的访问，即Exclusive访问，这很明显减小了开销，因为在已有CPU持有锁的情况下其它CPU是不会发出原子指令的。随后使用amoswap指令进行swap操作，该操作将目标寄存器中保存地址指向的内存值取出，然后替换为一个新的值，并将原先取出的值作为返回值取出。也就是说`arch_spin_trylock`的操作本身就是：通过amoswap将1写入`lock->lock`，检查其原有的值是不是0，如果是0，则认为自己抢到了（因为它第一个写入了1），否则，认为自己没有抢到。当然，在这之后需要使用`fence`指令来一个acquire语义。
+
+### arch_spin_unlock
+
+```c
+static inline void arch_spin_unlock(arch_spinlock_t *lock)
+{
+        smp_store_release(&lock->lock, 0);
+}
+```
+
