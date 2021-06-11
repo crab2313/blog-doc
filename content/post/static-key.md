@@ -1,8 +1,6 @@
 +++
 title = "Linux内核在RISC-V平台下的static key机制"
 date = 2021-06-09
-draft = true
-
 
 tags = ["kernel"]
 +++
