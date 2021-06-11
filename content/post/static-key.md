@@ -248,8 +248,8 @@ static inline struct static_key *jump_entry_key(const struct jump_entry *entry)
 
 * 一定要明确`struct static_key`和`struct jump_entry`的关系。`struct static_key`是对我们想要的布尔变量的抽象，即取代原先`if`语句中的条件变量。`struct jump_entry`则是对生成分支的抽象，记录我们生成的特定分支的信息，这个信息放置于一个名为`__jump_label`的section中。注意真正生成的分支已经插到各种text段中了。
 * `struct jump_entry`，记录了一个分支的信息，便于我们后续追踪。包括分支处于的位置，分支是unlikely还是likely的，分支对应于哪一个`struct static_key`，后面还会看到`struct jump_entry`还记录了分支是否位于`__init`段中。
-* `struct static_key`记录了这个抽象布尔变量的值（counter形式，类似于preempt_enable等API，可以以类似栈的形式enable或者disable这个key）。还实现对所有于它关联的`struct jump_entry`的反向引用，以及这个`struct static_key`的初始状态，即初始为true还是初始为false。
-* 而真正位于`text`段上分支的状态只有一种，我们称其为分支填充状态，只有nop和jump两种情况。nop状态下，live patch点上写的是nop，分支会直接执行in-line的代码，反之，live patch点上填充的是一个jump语句，使得CPU在执行到这里是跳转到out-of-line的代码上。
+* `struct static_key`记录了这个抽象布尔变量的值（counter形式，类似于preempt_enable等API，可以以类似栈的形式enable或者disable这个key）。还实现对所有与它关联的`struct jump_entry`的反向引用，以及这个`struct static_key`的初始状态，即初始为true还是初始为false。
+* 而真正位于`text`段上分支的状态只有一种，我们称其为分支填充状态，只有nop和jump两种情况。nop状态下，live patch点上写的是nop，分支会直接执行in-line的代码，反之，live patch点上填充的是一个jump语句，使得CPU在执行到这里时跳转到out-of-line的代码上。
 * 分支的填充状态由`struct static_key`和`struct jump_entry`共同encode。简单来说，当前分支的填充状态可以通过如下表达式进行计算：`（likely/unlikely）^ (true/false)`。举例来说，对于一个likely的jump entry（即它有大概率为true），那么当这个key为true时，它一定是nop状态的。这是由于这套系统就是这么设计的，上述表达式实质上就是我们想要的结果，即一个likely true的分支，在key为true时，一定应该设置成最高效的nop状态。`static_key_likely`和`static_key_unlikely`实际上就是根据这个表达式设计的，根据这个表达式生成分支，以获取最优的性能。这个表达式本质上就是jump label设计的核心逻辑。让likely和unlikely的分支在命中时处于最高效的形式中。
 
 状态解码相关的实现举例如下：
@@ -330,5 +330,5 @@ void static_key_enable(struct static_key *key)
 EXPORT_SYMBOL_GPL(static_key_enable);
 ```
 
-本质上，函数根据`jump_label_can_update`函数确定一个`struct jump_entry`是否可以live patch。一般情况下只有`__init`段中的代码无法live patch。确认完成后，使用架构相关的`arch_jump_label_transform`将一个`struct jump_entry`进行live patch操作。对于RISC-V平台，由于指令是定长的，仅仅是根据`jump_entry_target`生成jump指令，或者简单使用nop对特定位置的u32进行更新而已。注意，这个更新需要刷新icache，invlidate特定的地址区域，否则无法立即生效。
+本质上，函数根据`jump_label_can_update`函数确定一个`struct jump_entry`是否可以live patch。一般情况下只有`__init`段中的代码无法live patch。确认完成后，使用架构相关的`arch_jump_label_transform`将一个`struct jump_entry`进行live patch操作。对于RISC-V平台，由于指令是定长的，仅仅是根据`jump_entry_target`生成jump指令，或者简单使用nop对特定位置的u32进行更新而已。注意，这个更新需要刷新icache，invalidate特定的地址区域，否则无法立即生效。
 
