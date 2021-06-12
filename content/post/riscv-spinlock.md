@@ -227,9 +227,9 @@ static inline unsigned long __raw_spin_lock_irqsave(raw_spinlock_t *lock)
 
 ## RISC-V的实现
 
-目前RISC-V用的这套实现是相当简单的，基本就是拍脑门就能想出来的。内核中稍有复杂度的实现为ticket-based spinlock和queue spinlock，日后RISC-V采用了这些实现之后，可以进行分析。使用这个简单实现的spinlock，是因为目前的RISC-V处理器的实现似乎都是低性能，且核心数较少的实现，不需要过度考虑性能已经公平性带来的影响。相信后面RISC-V应用于PC或者服务器系统时，会采用高性能的qspinlock实现。
+目前RISC-V用的这套实现是相当简单的，基本就是拍脑门就能想出来的。内核中稍有复杂度的实现为ticket-based spinlock和queue spinlock，日后RISC-V采用了这些实现之后，可以进行分析。使用这个简单实现的spinlock，是因为目前的RISC-V处理器的实现似乎都是低性能，且核心数较少的实现，不需要过度考虑性能以及公平性带来的影响。相信后面RISC-V应用于PC或者服务器系统时，会采用高性能的qspinlock实现。
 
-RISC-V实现的spinlock本质上是一个基于TAS（Test and Set）的spinlock，利用到了RISC-V提供的硬件源自操作指令。因此这个锁的定义是相当简单的，本质上就是一个整数：
+RISC-V实现的spinlock本质上是一个基于TAS（Test and Set）的spinlock，利用到了RISC-V提供的硬件原子操作指令。因此这个锁的定义是相当简单的，本质上就是一个整数：
 
 ```c
 typedef struct {
