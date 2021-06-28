@@ -33,7 +33,7 @@ tags = ["kernel", "binary"]
 * 模块源码本身生成的`.o`文件
 * modpost生成的`<module>.mod.c`文件编译后的`.o`文件
 
-在内核头文件中，与模块相关的定义一般有两套，一套用于生成vmlinux，另一套用于模块。这二者之间通过`MODULE`宏是否有定义进行区分。简单来说，内核用到个各个section在模块中也是适用了，模块的生成是比较简单的，真正复杂的处理在模块装载时体现。在内核的`scripts/mod`文件夹下，存放着`modpost`工具的源码，用于编译出`modpost`工具。modpost工具生成的`<module_name>.mod.c`类似如下：
+在内核头文件中，与模块相关的定义一般有两套，一套用于生成vmlinux，另一套用于模块。这二者之间通过`MODULE`宏是否有定义进行区分。简单来说，内核用到个各个section在模块中也是适用的，模块的生成是比较简单的，真正复杂的处理在模块装载时体现。在内核的`scripts/mod`文件夹下，存放着`modpost`工具的源码，用于编译出`modpost`工具。modpost工具生成的`<module_name>.mod.c`类似如下：
 
 ```c
 #include <linux/module.h>
@@ -107,7 +107,7 @@ struct load_info {
 };
 ```
 
-在传入`load_module`时，只有`hdr`和`len`字段，被填写为了存放ELF文件内容的地址与长度。对模块装载流程的分析转变称了对`load_module`函数的分析。
+在传入`load_module`时，只有`hdr`和`len`字段，被填写为了存放ELF文件内容的地址与长度。对模块装载流程的分析转变成了对`load_module`函数的分析。
 
 ## 合法性检查
 
