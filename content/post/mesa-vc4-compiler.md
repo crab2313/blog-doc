@@ -7,8 +7,6 @@ tags = ["mesa", "gallium3d", "vc4"]
 
 +++
 
-# 编译器后端
-
 这里先笼统的概括一下编译器部分的工作原理，细节后面再探讨。整个vc4的编译器后端一共进行了两次转换，多级优化，并实现了shader cache。从代码中可以发现，对一个shader编译是非常昂贵的操作，挑选特定的关键字（即shader的特征状态），根据关键字确定一个shader的唯一性，从而实现cache shader的操作，能极大的减少shader的编译次数，提升总体性能和帧率稳定性。这里列举一下想要进行分析的后端功能点：
 
 * 多级转换，最终生成shader二进制指令
@@ -20,76 +18,9 @@ tags = ["mesa", "gallium3d", "vc4"]
 * NIR转换成QIR。NIR是目前Mesa主流的IR，是Mesa的GLSL编译器生成TGSI中间表示后，一般要转换而成的中间表示。以前的Mesa驱动一般直接处理TGSI，而现在的Mesa驱动一般将TGSI通过共用功能模块转换成NIR后进行处理。NIR是一种比较便于优化的SSA表示方法。而QIR则是vc4根据自身的QPU特性设计出来的IR表示，这以转换阶段则直接将优化过的NIR转换为QIR表示。
 * QIR转换成二进制表示。vc4中实现了code emitter，通过读取QIR，而emit出最终的二进制指令。整个emit过程基本是按照相应的模板进行翻译操作。最后通过优化的方式将ALU A和ALU M相关的操作整合到一起，形成最终的二进制程序。
 
-## 指令构造器
 
-无论如何，shader最终都要编译成QPU能够认识的二进制指令然后执行。那么其中必不可少的一个功能就是生成一条指令的二进制表示，一个`uint64_t`类型的整数。其方式实现比较简单，可以轻松想想出来，即通过提供各种字段的enum，和字段的配置结构，一级一级的提供构造指令所用的函数。到最后，提供一套比较类似的接口，举例如下：
 
-```c
-uint64_t
-qpu_a_MOV(struct qpu_reg dst, struct qpu_reg src);
-```
-
-为了生成字段，首先要定义字段的位置，长度。`vc4_qpu_defines.h`中包含了相关的enum定义，简单先来看下：
-
-```c
-#define QPU_MASK(high, low) ((((uint64_t)1<<((high)-(low)+1))-1)<<(low))
-/* Using the GNU statement expression extension */
-#define QPU_SET_FIELD(value, field)                                       \
-        ({                                                                \
-                uint64_t fieldval = (uint64_t)(value) << field ## _SHIFT; \
-                assert((fieldval & ~ field ## _MASK) == 0);               \
-                fieldval & field ## _MASK;                                \
-         })
-
-#define QPU_GET_FIELD(word, field) ((uint32_t)(((word)  & field ## _MASK) >> field ## _SHIFT))
-
-#define QPU_UPDATE_FIELD(inst, value, field)                              \
-        (((inst) & ~(field ## _MASK)) | QPU_SET_FIELD(value, field))
-```
-
-本质上，通过两个抽象确定字段在指令中的位置：`_MASK`，`_SHIFT`。然后`QPU_GET_FILED`，`QPU_SET_FILED`通过这两个宏将数值更新到字段上。可以通过如下类似的方式，更改一个指令的相应字段：
-
-```c
-        inst |= QPU_SET_FIELD(QPU_SIG_NONE, QPU_SIG);
-        inst |= QPU_SET_FIELD(QPU_A_OR, QPU_OP_ADD);
-        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_A);
-        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_B);
-```
-
-vc4使用`struct qpu_reg`表示一个寄存器，注意指令中的寄存器字段是需要mux填充的，也就是指令中有专门的一个mux字段，表明指令操作的是哪种类型的存储空间（累加器，寄存器集合A，寄存器集合B）：
-
-```c
-struct qpu_reg {
-        enum qpu_mux mux;
-        uint8_t addr;
-};
-```
-
-有多个构造函数可以方便的快速构造对应类型的寄存器表示，这里不列举了。但事实上这些helper本质上还是给更上一层的接口使用的，即直接生成指令表示的函数。以`qpu_NOP`举例：
-
-```c
-uint64_t
-qpu_NOP()
-{
-        uint64_t inst = 0;
-
-        inst |= QPU_SET_FIELD(QPU_A_NOP, QPU_OP_ADD);
-        inst |= QPU_SET_FIELD(QPU_M_NOP, QPU_OP_MUL);
-
-        /* Note: These field values are actually non-zero */
-        inst |= QPU_SET_FIELD(QPU_W_NOP, QPU_WADDR_ADD);
-        inst |= QPU_SET_FIELD(QPU_W_NOP, QPU_WADDR_MUL);
-        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_A);
-        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_B);
-        inst |= QPU_SET_FIELD(QPU_SIG_NONE, QPU_SIG);
-
-        return inst;
-}
-```
-
-总之，接口的形式为类似`qpu_<INSTR>`的函数，其返回值为uint64_t，即真正构造出来的机器指令。而函数的参数则根据指令的不同而不同，一般为相应的寄存器参数。由于ALU指令大多有cond_add和sig字段，所以提供了`qpu_set_cond_add`和`qpu_set_sig`来设置相应的字段。
-
-## QIR
+# QIR
 
 QIR是vc4编译器后端的IR表示。NIR经过几轮优化之后，转换成QIR，进一步通过code emitter生成最终的shader指令程序。QIR的指令使用`qinst`表示，可以看到qinst提供了list_head用于串到一个链表上，且提供了一个op，表示操作类型，并存在source operand和dest operand，以及多个flag。
 
@@ -193,7 +124,9 @@ QIR中，使用`struct qblock`来表示一个block，这个结构体的内容比
 * QIR中使用`qir_new_block`创建并添加一个新的block
 * `vc4_compile`存在blocks字段记录这个编译结果中所有的blocks，并使用`cur_block`指针指向当前添加指令时的目标block
 
-### nir_to_qir
+# NIR转换为QIR
+
+## nir_to_qir
 
 NIR在经过各种优化之后，在`vc4_shader_ntq`函数中调用`nir_to_qir`转换成QIR。
 
@@ -221,7 +154,7 @@ nir_to_qir(struct vc4_compile *c)
 * ntq_set_inputs本质上是生成指令，将输入shader参数读取到一部分TEMP变量中
 * 
 
-## 寄存器分配器
+# 寄存器分配器
 
 这里先谈谈我对寄存器分配器的理解，然后结合vc4的实现进行分析。一般情况下IR会假定寄存器个数是无限多个，但是实际上可用的物理寄存器的个数是有限的。所以code generation中比较重要的一环就是将IR中使用的临时（虚拟）寄存器进行转换，将物理寄存器分配到相应的虚拟寄存器上。实现这个过程的代码单元被称作寄存器分配器。
 
@@ -241,7 +174,7 @@ nir_to_qir(struct vc4_compile *c)
 
 一旦找到这个属性的节点，那么就可以将这个顶点从图中去除掉，然后获得一个新图。重复这个过程，直到最后得到一个没有顶点的空图。然后反向将原来去除的节点依次添加回图（最后去除的最先添加），并给新添加的这个顶点赋予一个与其相邻节点都不相同的颜色。重复这个过程，即得到一个完成着色的图，按照图的定义，我们即得到了一个寄存器分配。这个过程中实际上存在情况，找不到local colorable属性的顶点，碰到这样的情况，我们就根据经验方法从图中去掉一个顶点，把这个顶点对应的temp寄存器放到内存空间中暂存，这个操作称作spill。去除掉一个顶点后得到的新图，重头开始这样的算法。最后一个问题就是怎么判断local colorable属性，论文中提出了pq test，可以参考论文的描述与证明。
 
-### 寄存器集合构建
+## 寄存器集合构建
 
 回到Mesa中，Mesa实现了上述基于class的寄存器分配器，并作为公共代码被大部分驱动所用。从原理上，我们可以理解，想要使用这样的寄存器分配器，我们实际上需要：
 
@@ -269,7 +202,7 @@ nir_to_qir(struct vc4_compile *c)
 
 函数最后调用`ra_set_finalize`函数，进行了pq test的预计算工作。
 
-### 冲突图构建
+## 冲突图构建
 
 得到寄存器集合，以及class的定义之后，构建图：
 
@@ -379,11 +312,80 @@ qir_writes_r4(struct qinst *inst)
 
 最后，调用`ra_allocate`，并收集temp到物理寄存器的映射。
 
-## Code Emitter
+# 指令构造器
+
+无论如何，shader最终都要编译成QPU能够认识的二进制指令然后执行。那么其中必不可少的一个功能就是生成一条指令的二进制表示，一个`uint64_t`类型的整数。其方式实现比较简单，可以轻松想想出来，即通过提供各种字段的enum，和字段的配置结构，一级一级的提供构造指令所用的函数。到最后，提供一套比较类似的接口，举例如下：
+
+```c
+uint64_t
+qpu_a_MOV(struct qpu_reg dst, struct qpu_reg src);
+```
+
+为了生成字段，首先要定义字段的位置，长度。`vc4_qpu_defines.h`中包含了相关的enum定义，简单先来看下：
+
+```c
+#define QPU_MASK(high, low) ((((uint64_t)1<<((high)-(low)+1))-1)<<(low))
+/* Using the GNU statement expression extension */
+#define QPU_SET_FIELD(value, field)                                       \
+        ({                                                                \
+                uint64_t fieldval = (uint64_t)(value) << field ## _SHIFT; \
+                assert((fieldval & ~ field ## _MASK) == 0);               \
+                fieldval & field ## _MASK;                                \
+         })
+
+#define QPU_GET_FIELD(word, field) ((uint32_t)(((word)  & field ## _MASK) >> field ## _SHIFT))
+
+#define QPU_UPDATE_FIELD(inst, value, field)                              \
+        (((inst) & ~(field ## _MASK)) | QPU_SET_FIELD(value, field))
+```
+
+本质上，通过两个抽象确定字段在指令中的位置：`_MASK`，`_SHIFT`。然后`QPU_GET_FILED`，`QPU_SET_FILED`通过这两个宏将数值更新到字段上。可以通过如下类似的方式，更改一个指令的相应字段：
+
+```c
+        inst |= QPU_SET_FIELD(QPU_SIG_NONE, QPU_SIG);
+        inst |= QPU_SET_FIELD(QPU_A_OR, QPU_OP_ADD);
+        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_A);
+        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_B);
+```
+
+vc4使用`struct qpu_reg`表示一个寄存器，注意指令中的寄存器字段是需要mux填充的，也就是指令中有专门的一个mux字段，表明指令操作的是哪种类型的存储空间（累加器，寄存器集合A，寄存器集合B）：
+
+```c
+struct qpu_reg {
+        enum qpu_mux mux;
+        uint8_t addr;
+};
+```
+
+有多个构造函数可以方便的快速构造对应类型的寄存器表示，这里不列举了。但事实上这些helper本质上还是给更上一层的接口使用的，即直接生成指令表示的函数。以`qpu_NOP`举例：
+
+```c
+uint64_t
+qpu_NOP()
+{
+        uint64_t inst = 0;
+
+        inst |= QPU_SET_FIELD(QPU_A_NOP, QPU_OP_ADD);
+        inst |= QPU_SET_FIELD(QPU_M_NOP, QPU_OP_MUL);
+
+        /* Note: These field values are actually non-zero */
+        inst |= QPU_SET_FIELD(QPU_W_NOP, QPU_WADDR_ADD);
+        inst |= QPU_SET_FIELD(QPU_W_NOP, QPU_WADDR_MUL);
+        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_A);
+        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_B);
+        inst |= QPU_SET_FIELD(QPU_SIG_NONE, QPU_SIG);
+
+        return inst;
+}
+```
+
+总之，接口的形式为类似`qpu_<INSTR>`的函数，其返回值为uint64_t，即真正构造出来的机器指令。而函数的参数则根据指令的不同而不同，一般为相应的寄存器参数。由于ALU指令大多有cond_add和sig字段，所以提供了`qpu_set_cond_add`和`qpu_set_sig`来设置相应的字段。
+
+# Code Emitter
 
 Code emitter的本质工作是实现从QIR到二进制可执行QPU（shader）程序的转换。其实现位于`vc4_qpu_emit.c`文件中，主要接口为`vc4_generate_code`与`vc4_generate_code_block`。其实现基本逻辑就是遍历所有的QIR指令，然后做简单的一对一翻译，有时候会根据需要插入额外指令。
 
-### Queue
+## Queue
 
 这里的queue即指队列，也指一个接口。shader程序实际上就是一堆`uint64_t`指令的集合，vc4中，这些指令被放到一个队列（链表）中。`queue`接口的实现如下：
 
@@ -413,7 +415,7 @@ set_last_cond_mul(struct qblock *block, uint32_t cond)
 }
 ```
 
-### vc4_generate_code_block
+## vc4_generate_code_block
 
 函数原型如下：
 
@@ -470,7 +472,7 @@ struct qreg {
 
 经过上面的分析，整体逻辑还是非常简单的，后面仅挑比较费解的细节分析。
 
-### VPM
+## VPM
 
 `QFILE_VPM`的写入非常简单，而其读取比较复杂。
 
@@ -487,7 +489,7 @@ struct qreg {
 
 VPM是外部的硬件模块，其读取方式比较复杂，需要经过配置。简单来说，读取时要对FIFO进行配置（写入一个寄存器），随后通过读取另一个寄存器得到VPM从FIFO传出的值。
 
-### vc4_generate_code
+## vc4_generate_code
 
 函数首先调用上面提到的寄存器分配器接口对寄存器进行分配操作：
 
@@ -520,21 +522,7 @@ VPM是外部的硬件模块，其读取方式比较复杂，需要经过配置�
 
 最后函数调用`qpu_schedule_instructions`，剩下的都是细节，主要与QPU硬件对二进制可执行程序的一些强制要求有关。
 
-## 指令调度器
+# 指令调度器
 
 TODO
-
-## records
-
-CLIP_WINDOW
-
-CONFIGURATION_BITS
-
-CLIPPER
-
-VIEWPORT_OFFSET
-
-FLAT_SHADE_FLAGS
-
-SHADER_RECORD
 
