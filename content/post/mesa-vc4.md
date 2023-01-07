@@ -7,7 +7,7 @@ tags = ["mesa", "gallium3d"]
 
 +++
 
-## 硬件分析
+# 硬件分析
 
 分析硬件驱动的时候一定要理解硬件。树莓派3作为一个嵌入式SoC平台，GPU这个词与PC平台并不是等价的。在PC平台，我们常将GPU称为显卡，这是因为PC平台使用PCIE总线，而GPU一般封装在一个独立的PCIE扩展卡上。同时，GPU这个词在PC上也泛指GPU、连同VPU和display controller，他们通常被做在同一块芯片上。而在嵌入式SoC平台上，由于基本上所有的IP都在SoC中，且可能来自不同的厂商，他们之间的差别就明显了，不再是一个整体。
 
@@ -92,7 +92,7 @@ done:
 
 TODO
 
-## gallium3d 驱动
+# gallium3d 驱动
 
 ## Draw
 
@@ -307,7 +307,65 @@ vc4_update_compiled_shaders(struct vc4_context *vc4, uint8_t prim_mode)
 
 函数进一步调用了`vc4_get_compiled_shader`获取编译后的shader，如果此时shader没有被编译过，则调用`vc4_shader_ntq`进行编译操作。
 
-## 编译器抽象
+
+
+## resource
+
+这里实际上就是`struct pipe_resource`，这是用来表示资源的对象，具象一点就是vertex buffer和texture这种。本质上应该是一个BO，这是因为目前内核DRM驱动大部分使用GEM作为显存管理的前端接口。所以大部分的驱动的`pipe_resource`子类实际上就是额外附加了一个bo。
+
+以前分析过GEM相关的代码，实际上BO在用户态就是一个handle，一个整数。但是vc4驱动自己wrap了一个`struct vc4_bo`类型，起到管理特定资源的作用，本质上是在BO的基础上实现一些优化，比如缓存map等。
+
+```c
+struct vc4_bo {
+        struct pipe_reference reference;
+        struct vc4_screen *screen;
+        void *map;
+        const char *name;
+        uint32_t handle;
+        uint32_t size;
+
+        /* This will be read/written by multiple threads without a lock -- you
+         * should take a snapshot and use it to see if you happen to be in the
+         * CL's handles at this position, to make most lookups O(1).  It's
+         * volatile to make sure that the compiler doesn't emit multiple loads
+         * from the address, which would make the lookup racy.
+         */
+        volatile uint32_t last_hindex;
+
+        /** Entry in the linked list of buffers freed, by age. */
+        struct list_head time_list;
+        /** Entry in the per-page-count linked list of buffers freed (by age). */
+        struct list_head size_list;
+        /** Approximate second when the bo was freed. */
+        time_t free_time;
+        /**
+         * Whether only our process has a reference to the BO (meaning that
+         * it's safe to reuse it in the BO cache).
+         */
+        bool private;
+};
+```
+
+vc4驱动实现了一个BO cache，每当申请`struct vc4_bo`对象时，都会先从这个cache中查找。这个BO cache是per screen的，也就是所有的context共用一个BO cache。
+
+```c
+        struct vc4_bo_cache {
+                /** List of struct vc4_bo freed, by age. */
+                struct list_head time_list;
+                /** List of struct vc4_bo freed, per size, by age. */
+                struct list_head *size_list;
+                uint32_t size_list_size;
+
+                mtx_t lock;
+
+                uint32_t bo_size;
+                uint32_t bo_count;
+        } bo_cache;
+```
+
+简单来看就是两个free list，分别按大小和存在时长排序，除此之外还记录了BO cache的基础信息，大小和内部的BO个数。
+
+# 编译器后端
 
 这里先笼统的概括一下编译器部分的工作原理，细节后面再探讨。整个vc4的编译器后端一共进行了两次转换，多级优化，并实现了shader cache。从代码中可以发现，对一个shader编译是非常昂贵的操作，挑选特定的关键字（即shader的特征状态），根据关键字确定一个shader的唯一性，从而实现cache shader的操作，能极大的减少shader的编译次数，提升总体性能和帧率稳定性。这里列举一下想要进行分析的后端功能点：
 
@@ -320,11 +378,16 @@ vc4_update_compiled_shaders(struct vc4_context *vc4, uint8_t prim_mode)
 * NIR转换成QIR。NIR是目前Mesa主流的IR，是Mesa的GLSL编译器生成TGSI中间表示后，一般要转换而成的中间表示。以前的Mesa驱动一般直接处理TGSI，而现在的Mesa驱动一般将TGSI通过共用功能模块转换成NIR后进行处理。NIR是一种比较便于优化的SSA表示方法。而QIR则是vc4根据自身的QPU特性设计出来的IR表示，这以转换阶段则直接将优化过的NIR转换为QIR表示。
 * QIR转换成二进制表示。vc4中实现了code emitter，通过读取QIR，而emit出最终的二进制指令。整个emit过程基本是按照相应的模板进行翻译操作。最后通过优化的方式将ALU A和ALU M相关的操作整合到一起，形成最终的二进制程序。
 
-## Code Emitter
+## 指令构造器
 
-我们先分析code emitter相关的代码，code emitter实际上应该是非常简单的，本质上生成二进制指令在内存中的表示。上级代码通过调用code emitter，构造出二进制程序在内存中的表示，最后通过code emitter将这个在内存中的表示转换成最终的GPU可执行程序。
+无论如何，shader最终都要编译成QPU能够认识的二进制指令然后执行。那么其中必不可少的一个功能就是生成一条指令的二进制表示，一个`uint64_t`类型的整数。其方式实现比较简单，可以轻松想想出来，即通过提供各种字段的enum，和字段的配置结构，一级一级的提供构造指令所用的函数。到最后，提供一套比较类似的接口，举例如下：
 
-`vc4_qpu_defines.h`中包含了相关的enum定义，简单先来看下：
+```c
+uint64_t
+qpu_a_MOV(struct qpu_reg dst, struct qpu_reg src);
+```
+
+为了生成字段，首先要定义字段的位置，长度。`vc4_qpu_defines.h`中包含了相关的enum定义，简单先来看下：
 
 ```c
 #define QPU_MASK(high, low) ((((uint64_t)1<<((high)-(low)+1))-1)<<(low))
@@ -342,7 +405,16 @@ vc4_update_compiled_shaders(struct vc4_context *vc4, uint8_t prim_mode)
         (((inst) & ~(field ## _MASK)) | QPU_SET_FIELD(value, field))
 ```
 
-本质上，通过两个抽象确定字段在指令中的位置：`_MASK`，`_SHIFT`。然后`QPU_GET_FILED`，`QPU_SET_FILED`通过这两个宏将数值更新到字段上。vc4使用`struct qpu_reg`表示一个寄存器，注意指令中的寄存器字段是需要mux填充的，也就是指令中有专门的一个mux字段，表明指令操作的是哪种类型的存储空间（累加器，寄存器集合A，寄存器集合B）：
+本质上，通过两个抽象确定字段在指令中的位置：`_MASK`，`_SHIFT`。然后`QPU_GET_FILED`，`QPU_SET_FILED`通过这两个宏将数值更新到字段上。可以通过如下类似的方式，更改一个指令的相应字段：
+
+```c
+        inst |= QPU_SET_FIELD(QPU_SIG_NONE, QPU_SIG);
+        inst |= QPU_SET_FIELD(QPU_A_OR, QPU_OP_ADD);
+        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_A);
+        inst |= QPU_SET_FIELD(QPU_R_NOP, QPU_RADDR_B);
+```
+
+vc4使用`struct qpu_reg`表示一个寄存器，注意指令中的寄存器字段是需要mux填充的，也就是指令中有专门的一个mux字段，表明指令操作的是哪种类型的存储空间（累加器，寄存器集合A，寄存器集合B）：
 
 ```c
 struct qpu_reg {
@@ -373,7 +445,7 @@ qpu_NOP()
 }
 ```
 
-总之，code emitter接口的形式为类似`qpu_<INSTR>`的函数，其返回值为uint64_t，即真正构造出来的机器指令。而函数的参数则根据指令的不同而不同，一般为相应的寄存器参数。由于ALU指令大多有cond_add和sig字段，所以提供了`qpu_set_cond_add`和`qpu_set_sig`来设置相应的字段。
+总之，接口的形式为类似`qpu_<INSTR>`的函数，其返回值为uint64_t，即真正构造出来的机器指令。而函数的参数则根据指令的不同而不同，一般为相应的寄存器参数。由于ALU指令大多有cond_add和sig字段，所以提供了`qpu_set_cond_add`和`qpu_set_sig`来设置相应的字段。
 
 ## QIR
 
@@ -665,9 +737,125 @@ qir_writes_r4(struct qinst *inst)
 
 最后，调用`ra_allocate`，并收集temp到物理寄存器的映射。
 
-## vc4_generate_code
+## Code Emitter
 
-对于Coord和Vertex shader，先配置好VPM的输出：
+Code emitter的本质工作是实现从QIR到二进制可执行QPU（shader）程序的转换。其实现位于`vc4_qpu_emit.c`文件中，主要接口为`vc4_generate_code`与`vc4_generate_code_block`。其实现基本逻辑就是遍历所有的QIR指令，然后做简单的一对一翻译，有时候会根据需要插入额外指令。
+
+### Queue
+
+这里的queue即指队列，也指一个接口。shader程序实际上就是一堆`uint64_t`指令的集合，vc4中，这些指令被放到一个队列（链表）中。`queue`接口的实现如下：
+
+```c
+static void
+queue(struct qblock *block, uint64_t inst)
+{
+        struct queued_qpu_inst *q = rzalloc(block, struct queued_qpu_inst);
+        q->inst = inst;
+        list_addtail(&q->link, &block->qpu_inst_list);
+}
+```
+
+本质上就是创建一个链表元素，然后添加到链表尾部。除此之外，由于实现需要，还提供了两个接口，用于更改链表最后一个元素中指令的Condition字段：
+
+```c
+static void
+set_last_cond_add(struct qblock *block, uint32_t cond)
+{
+        *last_inst(block) = qpu_set_cond_add(*last_inst(block), cond);
+}
+
+static void
+set_last_cond_mul(struct qblock *block, uint32_t cond)
+{
+        *last_inst(block) = qpu_set_cond_mul(*last_inst(block), cond);
+}
+```
+
+### vc4_generate_code_block
+
+函数原型如下：
+
+```c
+static void
+vc4_generate_code_block(struct vc4_compile *c,
+                        struct qblock *block,
+                        struct qpu_reg *temp_registers);
+```
+
+首先明确code block实际上类似与编译器中的basic block的概念，即一个顺序执行（没有分支跳转）的最小代码单元，函数的第二个参数block即为这样一个basic block单元，由QIR组成。函数的第三个参数为前面分析过的寄存器分配器的输出，即物理寄存器到temp寄存器的一个分配。有了这些前置条件，即可开始分析代码。
+
+我们知道一个SSA形式的指令有类似如下的样式：
+
+```
+dest = op (src0, src1, src2, ......)
+```
+
+而我们要做的实质上就是将这种形式的QIR转换成QPU能够执行的指令。其中最简单的就是op的转换，QIR是为QPU设计的，其基本的`QOP_*` opcode本质上可以简单转换为QPU执行的opcode。随后就是src和dest的转换，他们的类型为QIR中的`struct qfile`：
+
+```c
+struct qreg {
+        enum qfile file;
+        uint32_t index;
+        int pack;
+};
+```
+
+本质上也是非常贴合QPU指令级的设计，我们以`QFILE_TEMP`和`QFILE_VARY`为例，简单分析。`QFILE_TEMP`为QIR中的临时寄存器表示，在前面的寄存器分配过程中，我们得到临时寄存器到物理寄存器的映射，并且函数参数也传入了映射结果，所以对于`QFILE_TEMP`的转换非常简单：
+
+```c
+                        case QFILE_TEMP:
+                                src[i] = temp_registers[index];
+                                if (qinst->src[i].pack) {
+                                        assert(!unpack ||
+                                               unpack == qinst->src[i].pack);
+                                        unpack = QPU_SET_FIELD(qinst->src[i].pack,
+                                                               QPU_UNPACK);
+                                        if (src[i].mux == QPU_MUX_R4)
+                                                unpack |= QPU_PM;
+                                }
+                                break;
+```
+
+简单读取这个映射即可。对于`QFILE_VARY`来说更为简单，因为这个寄存器的值实际上是映射到寄存器bank B上的，只需要简单配置即可：
+
+```c
+                        case QFILE_VARY:
+                                src[i] = qpu_vary();
+                                break;
+```
+
+实际上比较复杂的是`QFILE_VPM`，后面单独来一小结分析。
+
+经过上面的分析，整体逻辑还是非常简单的，后面仅挑比较费解的细节分析。
+
+### VPM
+
+`QFILE_VPM`的写入非常简单，而其读取比较复杂。
+
+```c
+                        case QFILE_VPM:
+                                setup_for_vpm_read(c, block);
+                                assert((int)qinst->src[i].index >=
+                                       last_vpm_read_index);
+                                (void)last_vpm_read_index;
+                                last_vpm_read_index = qinst->src[i].index;
+                                src[i] = qpu_ra(QPU_R_VPM);
+                                break;
+```
+
+VPM是外部的硬件模块，其读取方式比较复杂，需要经过配置。简单来说，读取时要对FIFO进行配置（写入一个寄存器），随后通过读取另一个寄存器得到VPM从FIFO传出的值。
+
+### vc4_generate_code
+
+函数首先调用上面提到的寄存器分配器接口对寄存器进行分配操作：
+
+```c
+        struct qpu_reg *temp_registers = vc4_register_allocate(vc4, c);
+        if (!temp_registers)
+                return;
+```
+
+然后，对于Coord和Vertex shader，先配置好VPM的输出：
 
 ```c
         switch (c->stage) {
@@ -681,26 +869,18 @@ qir_writes_r4(struct qinst *inst)
         }
 ```
 
-简单decode发现，是从0开始写入，stride为1，32位，horizontal的。接下来遍历所有的blocks，然后调用`vc4_generate_code_block`。Basic Block是没有转向语句的最小组成单元，结构非常简单，适合生成相应的代码。核心函数是queue：
+接下来遍历所有的blocks，然后调用`vc4_generate_code_block`：
 
 ```c
-static void
-queue(struct qblock *block, uint64_t inst)
-{
-        struct queued_qpu_inst *q = rzalloc(block, struct queued_qpu_inst);
-        q->inst = inst;
-        list_addtail(&q->link, &block->qpu_inst_list);
-}
+        qir_for_each_block(block, c)
+                vc4_generate_code_block(c, block, temp_registers);
 ```
 
-即向qblock的`qpu_inst_list`中添加一条指令。`vc4_generate_code_block`的工作逻辑非常简单：
+最后函数调用`qpu_schedule_instructions`，剩下的都是细节，主要与QPU硬件对二进制可执行程序的一些强制要求有关。
 
-* 遍历所有的QIR指令，然后进行如下操作：
-* 转换所有QIR的源operand
-* 转换所有QIR的目标operand
-* 根据opcode生成指令，调用queue
+## 指令调度器
 
-这个循环最复杂的就是准备operand了，这涉及很多东西。举个例子：当源operand为`QFILE_VPM`时，这里的“准备”包括生成VPM的读取指令，然后进行相应的读取操作。
+TODO
 
 ## records
 
@@ -716,58 +896,3 @@ FLAT_SHADE_FLAGS
 
 SHADER_RECORD
 
-## resource
-
-这里实际上就是`struct pipe_resource`，这是用来表示资源的对象，具象一点就是vertex buffer和texture这种。本质上应该是一个BO，这是因为目前内核DRM驱动大部分使用GEM作为显存管理的前端接口。所以大部分的驱动的`pipe_resource`子类实际上就是额外附加了一个bo。
-
-以前分析过GEM相关的代码，实际上BO在用户态就是一个handle，一个整数。但是vc4驱动自己wrap了一个`struct vc4_bo`类型，起到管理特定资源的作用，本质上是在BO的基础上实现一些优化，比如缓存map等。
-
-```c
-struct vc4_bo {
-        struct pipe_reference reference;
-        struct vc4_screen *screen;
-        void *map;
-        const char *name;
-        uint32_t handle;
-        uint32_t size;
-
-        /* This will be read/written by multiple threads without a lock -- you
-         * should take a snapshot and use it to see if you happen to be in the
-         * CL's handles at this position, to make most lookups O(1).  It's
-         * volatile to make sure that the compiler doesn't emit multiple loads
-         * from the address, which would make the lookup racy.
-         */
-        volatile uint32_t last_hindex;
-
-        /** Entry in the linked list of buffers freed, by age. */
-        struct list_head time_list;
-        /** Entry in the per-page-count linked list of buffers freed (by age). */
-        struct list_head size_list;
-        /** Approximate second when the bo was freed. */
-        time_t free_time;
-        /**
-         * Whether only our process has a reference to the BO (meaning that
-         * it's safe to reuse it in the BO cache).
-         */
-        bool private;
-};
-```
-
-vc4驱动实现了一个BO cache，每当申请`struct vc4_bo`对象时，都会先从这个cache中查找。这个BO cache是per screen的，也就是所有的context共用一个BO cache。
-
-```c
-        struct vc4_bo_cache {
-                /** List of struct vc4_bo freed, by age. */
-                struct list_head time_list;
-                /** List of struct vc4_bo freed, per size, by age. */
-                struct list_head *size_list;
-                uint32_t size_list_size;
-
-                mtx_t lock;
-
-                uint32_t bo_size;
-                uint32_t bo_count;
-        } bo_cache;
-```
-
-简单来看就是两个free list，分别按大小和存在时长排序，除此之外还记录了BO cache的基础信息，大小和内部的BO个数。

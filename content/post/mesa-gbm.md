@@ -1,9 +1,9 @@
 +++
-title = "MESA源码分析：GBM的使用与实现"
+title = "MESA源码分析：GBM"
 date = 2021-11-15
 
 
-tags = ["mesa", "drm"]
+tags = ["mesa", "drm", "gbm"]
 
 +++
 

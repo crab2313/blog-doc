@@ -17,6 +17,14 @@ tags = ["mesa", "egl"]
 
 分析的一切基础是EGL标准，可以在[这里](https://www.khronos.org/registry/EGL/specs/eglspec.1.5.pdf)找到。文档本身很短，这是因为它只是定义了非常基础的一部分标准，剩下的需要由扩展进行实现。MESA对于EGL的实现是比较独立的，位于`/src/egl`文件夹下，它的实现基于EGL标准，采取driver的方式进行区分。一个driver可以实现多个platform，目前可以看到的三个driver分别为dri2，haiku与wgl，分别对应与linux的DRI平台，haiku平台与windows上的WGL平台。我们代码分析的重点是dri2。
 
+## DRI2与Platform
+
+MESA的设计上，driver同时只能有一个，对于linux平台肯定是dri2了，我们简单解读一下dispatch流程。
+
+Displatch的起点肯定是EGL的API了，EGL的API在`src/egl/eglapi.c`文件中定义，并通过`EGLAPIENTRY`标记，很好区分。整个`libEGL`库也使用symbols文件限定了向外导出的符号。每一个driver都会定义自己的`struct _egl_driver`全局变量，在`eglInitialize`初始化时，会将该对象的指针写入`EGLDisplay`中。这个全局变量类型定义了驱动应该实现的相关函数，后续调用相关EGL API时，一般情况下，做完合法性检查，即会调用相应的函数指针。`struct _egl_driver`一般情况下是与EGL API一一对应的。
+
+在dri2驱动内部，又根据platform定义了一组函数指针，类型为`struct dri2_egl_display_vtbl`。对于不同的platform，dri2会调用对应的函数指针，根据platform的不同进行第二次dispatch。承接我们对gbm的分析，我认为本文应该分析EGL的gbm平台。
+
 ## eglGetPlatformDisplay
 
 对于EGL实现的分析自然要以EGL相关API作为入手点，我们从eglGetPlatformDisplay开始。该函数的目的是初始化EGL并根据特定的platform获取EGLDisplay。很明显该函数仅仅应该是一个入口，根据传入的platform的值来进行分发。前面聊到，我们关注的重点应该是GBM平台，如下：
