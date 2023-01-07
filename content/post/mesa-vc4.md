@@ -7,6 +7,13 @@ tags = ["mesa", "gallium3d"]
 
 +++
 
+本文分析vc4驱动的用户态部分，即Mesa中的用户态驱动实现。由于vc4是绝佳的学习范本，可以极大的促进对Mesa的理解，对vc4驱动的彻底分析理解是非常有必要的。本文从如下角度分析vc4的用户态驱动实现：
+
+* 硬件工作原理、文档以及接口
+* vc4驱动的内核驱动与用户态驱动交互
+* vc4驱动的shader编译器实现
+* vc4驱动如何与Mesa以及gallium3D框架集成
+
 # 硬件分析
 
 分析硬件驱动的时候一定要理解硬件。树莓派3作为一个嵌入式SoC平台，GPU这个词与PC平台并不是等价的。在PC平台，我们常将GPU称为显卡，这是因为PC平台使用PCIE总线，而GPU一般封装在一个独立的PCIE扩展卡上。同时，GPU这个词在PC上也泛指GPU、连同VPU和display controller，他们通常被做在同一块芯片上。而在嵌入式SoC平台上，由于基本上所有的IP都在SoC中，且可能来自不同的厂商，他们之间的差别就明显了，不再是一个整体。
@@ -26,9 +33,7 @@ tags = ["mesa", "gallium3d"]
 * Hardware Context。Stream Processor存在上下文的概念，本质上就是让Stream Processor恢复到某工作状态需要的全部状态。与CPU一样，可以通过将硬件上下文dump到内存中保存上下文，随后将上下文状态装入到硬件中恢复执行状态，实现上下文切换和管理。
 * Blitter。Blitter实际上是`Block Image Transmitter`的缩写，本质上是逻辑电路单元，可以快速的将一段内存移动到其他位置上。GPU中一般利用这个单元对texture和bitmap进行传输。
 
-
-
-## Control List
+# Control List
 
 Control List在Videocore 4中起到command ring的作用，也就是CPU向GPU提交任务的手段。Videocore 4的手册在Section 9描述了其具体格式，但是没有详细典型用法。简单来说Control List（简称cl）是有多个记录组成的列表，每个记录由一个id开头，确定记录类型，然后紧跟相应格式的数据，大致有下面几种类型：
 
@@ -92,33 +97,9 @@ done:
 
 TODO
 
-# gallium3d 驱动
+## 工作机制
 
-## Draw
-
-接下来分析一些常见的`pipe_context`上的回调函数，起到入手control list分析的作用。目前仅仅依靠一份比较抽象的文档，在没有深厚驱动背景的情况下，是不容易进行深入分析，需要要利用一切可以利用的资源，利用残片拼出全局。
-
-## Clear
-
-```c
-static void
-vc4_clear(struct pipe_context *pctx, unsigned buffers, const struct pipe_scissor_state *scissor_state,
-          const union pipe_color_union *color, double depth, unsigned stencil);
-```
-
-这个clear回调函数实际上对应着opengl中一个非常简单的操作，即`glClear`，建议先查看[文档](https://www.khronos.org/registry/OpenGL-Refpages/gl4/html/glClear.xhtml)。简单来说，这是一个`state-using`函数，其目的是根据先前使用`glClearColor`、`glClearDepth`或者`glClearStencil`函数设置的三个值（填充值），将对应的buffer进行clear操作。
-
-从函数的参数上可以很明显的得出如下信息：
-
-* buffer参数实际上就是`glClear`的bitmask，可以由COLOR,DEPTH,STENCIL组成
-* 后续的`color`,`depth`，`stencil`三个参数实际上就是对应的填充值，仅当bitmask中存在对应位的时候生效
-* `scissor_state`实际上对应`glClear`中的scissor box，限制生效的区域
-
-所以总结起来，该回调函数的操作就是根据buffer bitmask将由`pipe_scissor_state`指定的区域填充成指定的值。
-
-### 工作机制
-
-这里没有接触过移动GPU的人会很疑问这里的binning和render到底是个什么东西，为什么要区分这两个阶段。这个区分本质上是因为vc4的pipeline实际上是基于tile的渲染。tiling based rendering在很多地方都有提到，这里只给出名字和基本的工作原理。tile在英文中一般是指大小一样的小块，在这里特指特定大小的像素区域。tile baed rendering本质上是一种改进后的渲染方式，这种改进能够很大程度上优化硬件所使用的资源，最大的优化就是显存带宽以及缓存本地性。顾名思义，其本质上就是将整个frame buffer分成多个tile，一般为16x16大小或者32x32大小，然后对每一个tile进行单独渲染，最后将渲染结果组合到一起，形成整个framebuffer。
+这里没有接触过移动GPU的人会很疑问这里的binning和render到底是个什么东西，为什么要区分这两个阶段。这个区分本质上是因为vc4的pipeline实际上是基于tile的渲染。tiling based rendering在很多地方都有提到，这里只给出名字和基本的工作原理。tile在英文中一般是指大小一样的小块，在这里特指特定大小的像素区域。tile based rendering本质上是一种改进后的渲染方式，这种改进能够很大程度上优化硬件所使用的资源，最大的优化就是显存带宽以及缓存本地性。顾名思义，其本质上就是将整个frame buffer分成多个tile，一般为16x16大小或者32x32大小，然后对每一个tile进行单独渲染，最后将渲染结果组合到一起，形成整个framebuffer。
 
 仅仅使用这种优化其实并不够，还有一个明显的优化：我们可以首先通过vertex shader计算出每一个顶点经过映射后，最终的座标，并得到这个顶点与其他顶点组整的形状是是否会影响到这个tile上渲染的结果。所以，这个优化操作在vc4的硬件中就被抽象成了单独的操作，称作binning，其本质就是完成上述的运算步骤，得到一个tile与其相关的顶点数据。只不过硬件设计上更进了一步，不仅仅完成了上述步骤，还能够自动的生成接下来对这个tile进行渲染动作的control list。
 
@@ -147,67 +128,7 @@ control list总结起来，数据分成三部分，它的作用是驱动整个pi
 
 从videocore 4的control list引擎如何工作，我们可以得出驱动程序的设计。简单来说，就是驱动需要追踪control list引擎的状态改变，在状态发生改变时，生成对应的record去修改状态。除此之外，还要精确追踪当前的control list（即vc4_job），在必须进行一次提交的时候，进行一次提交。比如说一次完整的pipeline工作流程，或者连续两个不可合并成一个batch的操作等。
 
-### shader
-
-shader在list中实际上也是通过一个record体现的，叫做`SHADER_REC`。shader这部分还需要查手册，并理解相关的编译器，后面再完善。
-
-### 状态数据
-
-`vc4_job`中存在一个dirty标志，当标志特定状态需要更新时，生成的binning list就会添加特定的record
-
-### primitive list
-
-前面提到primitive list包含三部分内容，vertex数据本身，对数据的解读，以及render命令本身。我们知道gallium3D中通过resource抽象一块显存区域。很明显，我们需要使用resource存储vertex数据，简单来说就是一个BO。
-
-## draw_vbo
-
-draw_vbo回调函数简直是一个大杂烩，简单来说，它需要直接实现opengl接口多种不同的render指令：
-
-* 直接绘制（direct draw）
-* 间接绘制（indirect draw）
-* 实例化绘制（instanced draw）
-* 基于索引的绘制（indexed draw）
-* MultiDraw
-
-简单来说，opengl的render指令分成基于索引的与非基于索引的，即`glDrawElements`和`glDrawArrays`及其变体。在此之上，存在实例化绘制与间接绘制的变体，也存在添加简单偏移量的`BaseVertex`变体。`draw_vbo`必须完整的处理这些情况，所以其输入参数是比较复杂的。
-
-```c
-   void (*draw_vbo)(struct pipe_context *pipe,
-                    const struct pipe_draw_info *info,
-                    unsigned drawid_offset,
-                    const struct pipe_draw_indirect_info *indirect,
-                    const struct pipe_draw_start_count_bias *draws,
-                    unsigned num_draws);
-```
-
-现在我们来从一个比较逻辑化的方式来理解这个函数的参数。首先我们知道opengl中存在类似`glMultiDrawArrays`这样的函数，其本质就是将多个`glDrawArrays`压缩成一个调用，一次完成。其参数就是简单的将`glDrawArrays`替换成了一个数组。这个函数对应到`draw_vbo`回调函数，就是`draws`与`num_draws`两个参数。
-
-```c
-struct pipe_draw_start_count_bias {
-   unsigned start;
-   unsigned count;
-   int index_bias; /**< a bias to be added to each index */
-};
-```
-
-本质上，`start`与`count`即对应`glDrawArrays`的两个参数，而`index_bias`则对应`BaseVertex`的变体。驱动可以根据硬件的特性选择是否对这个场景进行优化，也可以选择直接调用`util_draw_multi`函数，将MultiDraw单纯的拆成一个一个地执行。
-
-对于instanced draw，我们可以把普通的`glDrawArrays`一般化为instance数为一的instanced draw。所以，`info->instace_count`参数用于标记instance的个数，如果不为一，则需要进行额外处理。`indirect`参数是否为NULL直接表明这个绘制是否是间接的，对于间接的绘制，`indirect`参数中储存了相应buffer的信息。
-
-## vc4_draw_vbo
-
-该函数即为对vc4的`draw_vbo`回调函数的实现。首先看到这个函数没有对multidraw进行优化：
-
-```c
-        if (num_draws > 1) {
-                util_draw_multi(pctx, info, drawid_offset, indirect, draws, num_draws);
-                return;
-        }
-```
-
-直接调用`util_draw_multi`将multidraw拆分成单个的draw，然后继续调用draw_vbo回调函数进行处理。
-
-## Control List的代码实现
+## 代码实现
 
 用户态vc4驱动的核心功能是构建control list，而从内核态相关代码来看，vc4的用户态驱动只需要构建binning control list，简称bcl。vc4硬件中的PTB引擎会替我们生成一部分的render control list，简称rcl。为此，vc4驱动应该实现一套比较方便的API，用于快速生成，表示，导出一个control list，这里主要研究这个实现。
 
@@ -272,6 +193,94 @@ struct vc4_cl {
 ```
 
 除此之外，还有一个比较重要的实现就是reloc了。从手册中我们知道，很多record中实际是可以引用物理地址的，但很明显，从用户态驱动的角度，它并不能知道虚拟地址对应的物理地址。因此，这部分内容需要内核帮助处理，而用户态只需要递交给内核态record中引用的数据，从实现的角度上来看，这些数据都是放在某一个BO中的。因此，从实际出发，这些物理地址上都是填写的BO的handle（32位整数）以及相应的offset。
+
+# Gallium3D
+
+## Draw
+
+接下来分析一些常见的`pipe_context`上的回调函数，起到入手control list分析的作用。目前仅仅依靠一份比较抽象的文档，在没有深厚驱动背景的情况下，是不容易进行深入分析，需要要利用一切可以利用的资源，利用残片拼出全局。
+
+## Clear
+
+```c
+static void
+vc4_clear(struct pipe_context *pctx, unsigned buffers, const struct pipe_scissor_state *scissor_state,
+          const union pipe_color_union *color, double depth, unsigned stencil);
+```
+
+这个clear回调函数实际上对应着opengl中一个非常简单的操作，即`glClear`，建议先查看[文档](https://www.khronos.org/registry/OpenGL-Refpages/gl4/html/glClear.xhtml)。简单来说，这是一个`state-using`函数，其目的是根据先前使用`glClearColor`、`glClearDepth`或者`glClearStencil`函数设置的三个值（填充值），将对应的buffer进行clear操作。
+
+从函数的参数上可以很明显的得出如下信息：
+
+* buffer参数实际上就是`glClear`的bitmask，可以由COLOR,DEPTH,STENCIL组成
+* 后续的`color`,`depth`，`stencil`三个参数实际上就是对应的填充值，仅当bitmask中存在对应位的时候生效
+* `scissor_state`实际上对应`glClear`中的scissor box，限制生效的区域
+
+所以总结起来，该回调函数的操作就是根据buffer bitmask将由`pipe_scissor_state`指定的区域填充成指定的值。
+
+
+
+### shader
+
+shader在list中实际上也是通过一个record体现的，叫做`SHADER_REC`。shader这部分还需要查手册，并理解相关的编译器，后面再完善。
+
+### 状态数据
+
+`vc4_job`中存在一个dirty标志，当标志特定状态需要更新时，生成的binning list就会添加特定的record
+
+### primitive list
+
+前面提到primitive list包含三部分内容，vertex数据本身，对数据的解读，以及render命令本身。我们知道gallium3D中通过resource抽象一块显存区域。很明显，我们需要使用resource存储vertex数据，简单来说就是一个BO。
+
+## draw_vbo
+
+draw_vbo回调函数简直是一个大杂烩，简单来说，它需要直接实现opengl接口多种不同的render指令：
+
+* 直接绘制（direct draw）
+* 间接绘制（indirect draw）
+* 实例化绘制（instanced draw）
+* 基于索引的绘制（indexed draw）
+* MultiDraw
+
+简单来说，opengl的render指令分成基于索引的与非基于索引的，即`glDrawElements`和`glDrawArrays`及其变体。在此之上，存在实例化绘制与间接绘制的变体，也存在添加简单偏移量的`BaseVertex`变体。`draw_vbo`必须完整的处理这些情况，所以其输入参数是比较复杂的。
+
+```c
+   void (*draw_vbo)(struct pipe_context *pipe,
+                    const struct pipe_draw_info *info,
+                    unsigned drawid_offset,
+                    const struct pipe_draw_indirect_info *indirect,
+                    const struct pipe_draw_start_count_bias *draws,
+                    unsigned num_draws);
+```
+
+现在我们来从一个比较逻辑化的方式来理解这个函数的参数。首先我们知道opengl中存在类似`glMultiDrawArrays`这样的函数，其本质就是将多个`glDrawArrays`压缩成一个调用，一次完成。其参数就是简单的将`glDrawArrays`替换成了一个数组。这个函数对应到`draw_vbo`回调函数，就是`draws`与`num_draws`两个参数。
+
+```c
+struct pipe_draw_start_count_bias {
+   unsigned start;
+   unsigned count;
+   int index_bias; /**< a bias to be added to each index */
+};
+```
+
+本质上，`start`与`count`即对应`glDrawArrays`的两个参数，而`index_bias`则对应`BaseVertex`的变体。驱动可以根据硬件的特性选择是否对这个场景进行优化，也可以选择直接调用`util_draw_multi`函数，将MultiDraw单纯的拆成一个一个地执行。
+
+对于instanced draw，我们可以把普通的`glDrawArrays`一般化为instance数为一的instanced draw。所以，`info->instace_count`参数用于标记instance的个数，如果不为一，则需要进行额外处理。`indirect`参数是否为NULL直接表明这个绘制是否是间接的，对于间接的绘制，`indirect`参数中储存了相应buffer的信息。
+
+## vc4_draw_vbo
+
+该函数即为对vc4的`draw_vbo`回调函数的实现。首先看到这个函数没有对multidraw进行优化：
+
+```c
+        if (num_draws > 1) {
+                util_draw_multi(pctx, info, drawid_offset, indirect, draws, num_draws);
+                return;
+        }
+```
+
+直接调用`util_draw_multi`将multidraw拆分成单个的draw，然后继续调用draw_vbo回调函数进行处理。
+
+
 
 ## shader实现总览
 
@@ -477,7 +486,7 @@ struct qreg {
 `struct qreg`中使用qfile字段表示寄存器位于的存储区域，举上几个例子：
 
 * 使用TEMP类型标志临时的寄存器类型
-* 使用VARY表示，从VARYING差值硬件中读取出来的数据
+* 使用VARY表示从VARYING差值硬件中读取出来的数据
 * 使用UNIF表示从UNIFORM变量中读取出来的类型
 * 使用VPM表示存VPM存储区域中读取出来的数据
 
