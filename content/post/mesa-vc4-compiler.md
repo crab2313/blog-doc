@@ -18,8 +18,6 @@ tags = ["mesa", "gallium3d", "vc4"]
 * NIR转换成QIR。NIR是目前Mesa主流的IR，是Mesa的GLSL编译器生成TGSI中间表示后，一般要转换而成的中间表示。以前的Mesa驱动一般直接处理TGSI，而现在的Mesa驱动一般将TGSI通过共用功能模块转换成NIR后进行处理。NIR是一种比较便于优化的SSA表示方法。而QIR则是vc4根据自身的QPU特性设计出来的IR表示，这以转换阶段则直接将优化过的NIR转换为QIR表示。
 * QIR转换成二进制表示。vc4中实现了code emitter，通过读取QIR，而emit出最终的二进制指令。整个emit过程基本是按照相应的模板进行翻译操作。最后通过优化的方式将ALU A和ALU M相关的操作整合到一起，形成最终的二进制程序。
 
-
-
 # QIR
 
 QIR是vc4编译器后端的IR表示。NIR经过几轮优化之后，转换成QIR，进一步通过code emitter生成最终的shader指令程序。QIR的指令使用`qinst`表示，可以看到qinst提供了list_head用于串到一个链表上，且提供了一个op，表示操作类型，并存在source operand和dest operand，以及多个flag。
@@ -126,7 +124,7 @@ QIR中，使用`struct qblock`来表示一个block，这个结构体的内容比
 
 # NIR转换为QIR
 
-## nir_to_qir
+经过优化后的NIR通过`nir_to_qir`函数转换为QIR。
 
 NIR在经过各种优化之后，在`vc4_shader_ntq`函数中调用`nir_to_qir`转换成QIR。
 
@@ -149,10 +147,16 @@ nir_to_qir(struct vc4_compile *c)
 }
 ```
 
-其中ntq应该就是`Nir To Qir`的缩写。`ntq_setup_inputs`的功能比较直观，配置好QIR程序的输入。我们知道shader程序应该有多个输入变量的，这里要将他们从NIR映射到QIR中。
+其中ntq应该就是`Nir To Qir`的缩写。这里行为的核心思想：
 
-* ntq_set_inputs本质上是生成指令，将输入shader参数读取到一部分TEMP变量中
-* 
+* QIR已经比较贴近真正的程序了，程序的输入要从VPM中读取，所以转换NIR到QIR的时候，要生成读取参数的QIR指令
+* 同样，以vertex shader为例，shader执行完毕后，其进行的输出应该写回VPM，NIR到QIR的转换也要生成相应的QIR指令
+* NIR和QIR都是SSA中间表示，所以其转换也是类似直接转换
+
+`ntq_setup_inputs`的功能比较直观，配置好QIR程序的输入。我们知道shader程序应该有多个输入变量的，这里要将他们从NIR映射到QIR中。
+
+* ntq_setup_inputs本质上是生成指令，将输入shader参数读取到一部分TEMP变量中
+* ntq_setup_outputs本质上通过
 
 # 寄存器分配器
 
@@ -526,3 +530,6 @@ VPM是外部的硬件模块，其读取方式比较复杂，需要经过配置�
 
 TODO
 
+# Mesa接口
+
+这里主要分析gallium3d相关的实现。
