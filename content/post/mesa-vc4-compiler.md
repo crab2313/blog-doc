@@ -15,7 +15,7 @@ tags = ["mesa", "gallium3d", "vc4"]
 
 对于多级转换，实际上进行了如下几个转换操作：
 
-* NIR转换成QIR。NIR是目前Mesa主流的IR，是Mesa的GLSL编译器生成TGSI中间表示后，一般要转换而成的中间表示。以前的Mesa驱动一般直接处理TGSI，而现在的Mesa驱动一般将TGSI通过共用功能模块转换成NIR后进行处理。NIR是一种比较便于优化的SSA表示方法。而QIR则是vc4根据自身的QPU特性设计出来的IR表示，这以转换阶段则直接将优化过的NIR转换为QIR表示。
+* NIR转换成QIR。NIR是目前Mesa主流的IR，是Mesa的GLSL编译器生成TGSI中间表示后，一般要转换而成的中间表示。以前的Mesa驱动一般直接处理TGSI，而现在的Mesa驱动一般将TGSI通过共用功能模块转换成NIR后进行处理。NIR是一种比较便于优化的SSA表示方法。而QIR则是vc4根据自身的QPU特性设计出来的IR表示，这一转换阶段则直接将优化过的NIR转换为QIR表示。
 * QIR转换成二进制表示。vc4中实现了code emitter，通过读取QIR，而emit出最终的二进制指令。整个emit过程基本是按照相应的模板进行翻译操作。最后通过优化的方式将ALU A和ALU M相关的操作整合到一起，形成最终的二进制程序。
 
 # QIR
@@ -527,6 +527,248 @@ VPM是外部的硬件模块，其读取方式比较复杂，需要经过配置�
 最后函数调用`qpu_schedule_instructions`，剩下的都是细节，主要与QPU硬件对二进制可执行程序的一些强制要求有关。
 
 # 指令调度器
+
+从vc4的硬件手册中我们了解到，一条QPU的ALU指令上实际上是同时向两个ALU下发指令的，即有两套opcode的相关字段，分别给QPU的ADD和MUL两个ALU进行指令下发。但是在QIR中可以看到，两个ALU的指令都是独立作为QIR指令的，并没有实现这个特性。事实上，从编译器的设计角度上来看，这部分功能是由指令调度器实现的。vc4的指令调度器实现比较简单，位于`vc4_qir_schedule.c`文件中，其主要功能为：
+
+* 重新排序指令，减小QPU的stall，提升整个程序的性能
+* 合并两个ALU的operation成为一个独立的instruction
+* 将block整合成一个程序，并设置好跳转target
+
+基本上，指令调度器是vc4的shader编译器的最后一个阶段了，在他将已经生成的basic block进行处理，得到最终的可执行程序。
+
+## 基本设计
+
+同大部分编译器一样，vc4的指令调度器基于list scheduler，是目前市面上最常见的指令调度器实现。其基本设计是根据遍历basic block，根据指令依赖关系生成一个有向无环图（DAG），然后通过维护两个列表Active和Ready，从DAG的页节点开始，根据优先级和依赖关系悬着指令进行调度。后面会详细分析vc4使用的算法。
+
+vc4的指令调度器使用如下结构体表示一次指令调度使用的所有信息：
+
+```c
+struct choose_scoreboard {
+        struct dag *dag;
+        int tick;
+        int last_sfu_write_tick;
+        int last_uniforms_reset_tick;
+        uint32_t last_waddr_a, last_waddr_b;
+        bool tlb_locked;
+};
+```
+
+可以看到，其中`dag`字段是有向无环图，而tick为算法中使用的cycle计数。vc4通过遍历所有的basic block，进行这个basic block上的指令调度。在[Code Emitter](#Queue)中我们看到，调用指令构造器后得到的指令是存放在`block->qpu_inst_list`链表上的。而很明显这不是最终的shader程序存放的位置，从指令调度器的实现来看，我们发现最终的shader二进制程序存在在一个数组中，即`vc4_compile->qpu_inst`，并通过`qpu_serialize_one_inst`接口向数组中添加一个指令。
+
+从指令调度器的主要入口`qpu_schedule_instructions`中可以看到，其主要逻辑为：
+
+```c
+        uint32_t cycles = 0;
+        qir_for_each_block(block, c) {
+                block->start_qpu_ip = c->qpu_inst_count;
+                block->branch_qpu_ip = ~0;
+
+                cycles += qpu_schedule_instructions_block(c,
+                                                          &scoreboard,
+                                                          block,
+                                                          uniform_contents,
+                                                          uniform_data,
+                                                          &next_uniform);
+
+                block->end_qpu_ip = c->qpu_inst_count - 1;
+        }
+
+        qpu_set_branch_targets(c);
+```
+
+从这里可以看出，这个函数的主要逻辑是遍历所有的block，然后对block进行指令调度，然后将调度后的结果塞入`vc4_compile->qpu_inst`数组，并记录block在数组中的位置。随后，通过`qpu_set_branch_targets`函数，将每个basic block的分支跳转语句的目标位置改写，这在编译器的概念中叫relocation。
+
+`qpu_schedule_instructions_block`函数即是list scheduler的主要实现，关于list scheduler算法，这里不做具体介绍，假定都知道了，如果没有概念，建议看《Engineer A Compiler》，比龙书讲的清楚的多。实际上函数结构非常清晰：
+
+1. 构建DAG，计算DAG节点的边和相应的延迟
+2. 遍历DAG，开始list scheduler算法，对指令进行调度
+
+## DAG构建
+
+可以看到，vc4的list scheduler设计简单，没有进行register renaming的步骤，所以要将True Dependences和Antidependences都添加到DAG中。DAG的表示使用了Mesa中通用的helper，创建过程比较简单：
+
+* 首先遍历所有的指令创建DAG的顶点
+* 计算True Dependences，作为有向图的边
+* 计算Antidependences，作为有向图的边
+* 计算硬件资源依赖
+* 从下到上遍历图，计算主要路径的延迟，通过这个延迟当作选择顶点时的优先级，比较经典的做法
+
+依赖计算使用同一个算法跑两轮的形式，分别从头到尾，再从尾到头对指令序列进行处理，这两个函数分别为：
+
+```c
+static void
+calculate_forward_deps(struct vc4_compile *c, struct dag *dag,
+                       struct list_head *schedule_list)
+{
+        struct schedule_state state;
+
+        memset(&state, 0, sizeof(state));
+        state.dag = dag;
+        state.dir = F;
+
+        list_for_each_entry(struct schedule_node, node, schedule_list, link)
+                calculate_deps(&state, node);
+}
+
+static void
+calculate_reverse_deps(struct vc4_compile *c, struct dag *dag,
+                       struct list_head *schedule_list)
+{
+        struct schedule_state state;
+
+        memset(&state, 0, sizeof(state));
+        state.dag = dag;
+        state.dir = R;
+
+        list_for_each_entry_rev(struct schedule_node, node, schedule_list,
+                                link) {
+                calculate_deps(&state, (struct schedule_node *)node);
+        }
+}
+```
+
+在` calculate_deps`函数中可以通过传入的`schedule_state`参数的`dir`字段对这一batch是从头到尾还是从尾到头进行判断。`schedule_state`变量的定义如下：
+
+```c
+struct schedule_state {
+        struct dag *dag;
+        struct schedule_node *last_r[6];
+        struct schedule_node *last_ra[32];
+        struct schedule_node *last_rb[32];
+        struct schedule_node *last_sf;
+        struct schedule_node *last_vpm_read;
+        struct schedule_node *last_tmu_write;
+        struct schedule_node *last_tlb;
+        struct schedule_node *last_vpm;
+        struct schedule_node *last_uniforms_reset;
+        enum direction dir;
+        /* Estimated cycle when the current instruction would start. */
+        uint32_t time;
+};
+```
+
+其中`last_*`类型的变量都是指针，指向某个上个进行特定操作的指令，比如读取特定的累加器，或者寄存器bank A。
+
+这里再提一下为什么同一个算法从头到尾和从尾到头就能把依赖算清楚。首先明确由于是单独的basic block，所以不存在控制依赖的处理，所以仅仅剩数据依赖，而数据依赖分成以下三种情况：
+
+* read after write （True Dependence）
+* write after read （Antidependence）
+* write after write （Output Dependence）
+
+由于前面看到并没有使用register renaming处理Antidependence，所以Antidependence也要算成依赖的一种。这时候就可以简化处理的，从头到尾遍历指令序列，处理read after write，write after write，这一算法在反过来从尾到头处理同一指令序列的时候，就跟从头到尾处理write after read和write after write一样了。
+
+### raddr依赖计算
+
+`calculate_deps`中首先对raddr造成的依赖进行计算，raddr是ALU指令中对寄存器I/O的地址编码字段，分为bank A和bank B。可以看到`calculate_deps`中的实现如下：
+
+```c
+        if (sig != QPU_SIG_LOAD_IMM) {
+                process_raddr_deps(state, n, raddr_a, true);
+                if (sig != QPU_SIG_SMALL_IMM &&
+                    sig != QPU_SIG_BRANCH)
+                        process_raddr_deps(state, n, raddr_b, false);
+        }
+```
+
+其中第一个if判断排除load immediate指令，让ALU指令和Brach和Small Immediate指令通过，这三类指令有`raddr_a`。而只有ALU指令存在`raddr_b`字段，所以第二个if排除掉上述的两类指令。`process_raddr_deps`函数的实现很好理解，首先明确因为raddr是读取的operand，所以当前指令是在读取raddr所指向的位置。
+
+```c
+        switch (raddr) {
+        case QPU_R_VARY:
+                add_write_dep(state, &state->last_r[5], n);
+                break;
+
+        case QPU_R_VPM:
+                add_write_dep(state, &state->last_vpm_read, n);
+                break;
+
+        case QPU_R_UNIF:
+                add_read_dep(state, state->last_uniforms_reset, n);
+                break;
+```
+
+三种情况分别为：
+
+* 读取VARY。从文档中看到读取VARY寄存器会导致R5被写入，所以读取VARY的操作和前面对R5的写入有冲突
+* 读取VPM。VPM读取是连接FIFO的，对VPM的读取会改写VPM寄存器的值，所以事实上和上次的读取是有依赖的
+* 读取UNIFORM。读取UNIFORM和会重置UNIFORM值的reset是有依赖关系的。
+
+对于普通的寄存器bank A和bank B的写入，他们与上一个对同一位置的寄存器写入有依赖关系：
+
+```c
+        default:
+                if (raddr < 32) {
+                        if (is_a)
+                                add_read_dep(state, state->last_ra[raddr], n);
+                        else
+                                add_read_dep(state, state->last_rb[raddr], n);
+                } else {
+                        fprintf(stderr, "unknown raddr %d\n", raddr);
+                        abort();
+                }
+                break;
+        }
+```
+
+### waddr依赖计算
+
+`calculate_deps`中对waddr导致的依赖计算如下：
+
+```c
+        process_waddr_deps(state, n, waddr_add, true);
+        process_waddr_deps(state, n, waddr_mul, false);
+```
+
+`process_waddr_deps`函数中要注意ALU指令的WS字段可以转换ALU写入的寄存器bank，所以要通过该字段判断写入的寄存器bank：
+
+```c
+        uint64_t inst = n->inst->inst;
+        bool is_a = is_add ^ ((inst & QPU_WS) != 0);
+```
+
+由于从前面看到写入操作与对同一位置的写入操作冲突，所以这里仅仅判断写入位置，然后替换`schedule_state`里的指针，并添加一条冲突（图的边）即可。
+
+### MUX依赖计算
+
+我们知道ALU指令source operand的位置是由MUX控制的，可以直接指向累加器或者寄存器bank。所以，可以根据MUX字段的值判断指令是否读取了累加器。
+
+```c
+        if (add_op != QPU_A_NOP) {
+                process_mux_deps(state, n, add_a);
+                process_mux_deps(state, n, add_b);
+        }
+        if (mul_op != QPU_M_NOP) {
+                process_mux_deps(state, n, mul_a);
+                process_mux_deps(state, n, mul_b);
+        }
+```
+
+```c
+static void
+process_mux_deps(struct schedule_state *state, struct schedule_node *n,
+                 uint32_t mux)
+{
+        if (mux != QPU_MUX_A && mux != QPU_MUX_B)
+                add_read_dep(state, state->last_r[mux], n);
+}
+```
+
+### Condition依赖计算
+
+```c
+        process_cond_deps(state, n, QPU_GET_FIELD(inst, QPU_COND_ADD));
+        process_cond_deps(state, n, QPU_GET_FIELD(inst, QPU_COND_MUL));
+        if ((inst & QPU_SF) && sig != QPU_SIG_BRANCH)
+                add_write_dep(state, &state->last_sf, n);
+```
+
+实现比较简单，`process_cond_deps`中简单对所有设置了condition code的指令添加了读取依赖。
+
+### 延迟计算
+
+延迟计算使用的经典方法，即深度优先算法遍历整个图，计算单个指令到程序结尾的最小延迟。后面会根据最小延迟来作为优先级判断依据，优先使用最小延迟最大的节点进行调度。
+
+## 指令调度
 
 TODO
 
